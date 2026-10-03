@@ -543,7 +543,7 @@ public class Main extends ListenerAdapter {
     }
 
     // =======================================================
-    // FILTRE AUTOMATIQUE (MOTS INTERDITS AVEC MUTE + GESTION DES LIENS/GIFS/STICKERS)
+    // FILTRE AUTOMATIQUE (MOTS INTERDITS + BLOCAGE DE TOUS LES LIENS SAUF GIFS)
     // =======================================================
     @Override
     public void onMessageReceived(MessageReceivedEvent event) {
@@ -560,7 +560,7 @@ public class Main extends ListenerAdapter {
             .computeIfAbsent(userId, k -> new HashMap<>())
             .merge(channelId, 1, Integer::sum);
 
-        // Laisser passer les admins et modérateurs pour la modération textuelle
+        // Laisser passer les admins et modérateurs
         if (member.hasPermission(Permission.ADMINISTRATOR) || member.hasPermission(Permission.MESSAGE_MANAGE)) {
             return;
         }
@@ -613,47 +613,32 @@ public class Main extends ListenerAdapter {
                                 logChannel.sendMessageEmbeds(embedMod.build()).queue();
                             }
                         },
-                        error -> {
-                            TextChannel logChannel = event.getGuild().getTextChannelsByName("logs-admin", true)
-                                    .stream().findFirst().orElse(null);
-
-                            if (logChannel != null) {
-                                logChannel.sendMessage(
-                                    "⚠️ Impossible de mute " + event.getAuthor().getAsMention() 
-                                    + " pour le mot `" + mot + "` (permissions insuffisantes ou rôle supérieur)."
-                                ).queue();
-                            }
-                        }
+                        error -> {}
                     );
                 return;
             }
         }
 
-        // 2. Vérification des exceptions autorisées (Stickers, Pièces jointes, Embeds et GIFs de plateformes)
-        boolean hasStickers = !event.getMessage().getStickers().isEmpty();
-        boolean hasAttachments = !event.getMessage().getAttachments().isEmpty();
-        boolean hasEmbeds = !event.getMessage().getEmbeds().isEmpty();
+        // 2. Détection des liens web textuels
+        Pattern linkPattern = Pattern.compile("(?i)\\b((https?|ftp|file)://[-a-zA-Z0-9+&@#/%?=~_|!:,.;]*[-a-zA-Z0-9+&@#/%=~_|]|www\\.[-a-zA-Z0-9+&@#/%?=~_|!:,.;]*[-a-zA-Z0-9+&@#/%=~_|]|discord\\.gg/[a-zA-Z0-9]+|discord(app)?\\.com/invite/[a-zA-Z0-9]+)\\b");
+        Matcher matcher = linkPattern.matcher(messageContent);
 
-        boolean isGifOrAllowedMedia = 
+        boolean hasLink = matcher.find();
+
+        // 3. Exception pour les GIFs autorisés
+        boolean isAllowedGifLink = 
                 lowerCaseContent.contains("tenor.com") ||
                 lowerCaseContent.contains("giphy.com") ||
                 lowerCaseContent.contains("gph.is") ||
                 lowerCaseContent.contains("imgur.com") ||
                 lowerCaseContent.contains(".gif") ||
-                lowerCaseContent.contains(".webp") ||
-                hasAttachments || 
-                hasEmbeds ||
-                hasStickers;
+                lowerCaseContent.contains(".webp");
 
-        // 3. Détection des liens web textuels
-        Pattern linkPattern = Pattern.compile("(?i)\\b((https?|ftp|file)://[-a-zA-Z0-9+&@#/%?=~_|!:,.;]*[-a-zA-Z0-9+&@#/%=~_|]|www\\.[-a-zA-Z0-9+&@#/%?=~_|!:,.;]*[-a-zA-Z0-9+&@#/%=~_|]|discord\\.gg/[a-zA-Z0-9]+|discord(app)?\\.com/invite/[a-zA-Z0-9]+)\\b");
-        Matcher matcher = linkPattern.matcher(messageContent);
-
-        // Si un lien web externe est trouvé et qu'il ne s'agit PAS d'un GIF/média autorisé ni d'un sticker, on supprime.
-        if (matcher.find() && !isGifOrAllowedMedia) {
+        // 4. Suppression si c'est un lien externe de site web et que ce n'est PAS un GIF autorisé
+        if (hasLink && !isAllowedGifLink) {
             event.getMessage().delete().queue(
                 success -> {
-                    event.getChannel().sendMessage(member.getAsMention() + " ❌ Les liens externes ne sont pas autorisés sur ce serveur !")
+                    event.getChannel().sendMessage(member.getAsMention() + " ❌ Les liens externes de sites web ne sont pas autorisés sur ce serveur (seuls les GIFs et stickers sont permis) !")
                         .queue(msg -> {
                             scheduler.schedule(() -> msg.delete().queue(s -> {}, e -> {}), 5, TimeUnit.SECONDS);
                         });
