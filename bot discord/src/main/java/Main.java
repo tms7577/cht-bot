@@ -1,0 +1,703 @@
+import net.dv8tion.jda.api.EmbedBuilder;
+import net.dv8tion.jda.api.JDABuilder;
+import net.dv8tion.jda.api.Permission;
+import net.dv8tion.jda.api.entities.Guild;
+import net.dv8tion.jda.api.entities.Member;
+import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.entities.User;
+import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
+import net.dv8tion.jda.api.events.guild.member.GuildMemberJoinEvent;
+import net.dv8tion.jda.api.events.guild.member.GuildMemberRemoveEvent;
+import net.dv8tion.jda.api.events.guild.voice.GuildVoiceUpdateEvent;
+import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
+import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
+import net.dv8tion.jda.api.events.session.ReadyEvent;
+import net.dv8tion.jda.api.hooks.ListenerAdapter;
+import net.dv8tion.jda.api.interactions.commands.DefaultMemberPermissions;
+import net.dv8tion.jda.api.interactions.commands.OptionType;
+import net.dv8tion.jda.api.interactions.commands.build.Commands;
+import net.dv8tion.jda.api.interactions.commands.build.SubcommandData;
+import net.dv8tion.jda.api.requests.GatewayIntent;
+import net.dv8tion.jda.api.utils.FileUpload;
+
+import javax.imageio.ImageIO;
+import java.awt.*;
+import java.awt.geom.RoundRectangle2D;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import java.net.URL;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class Main extends ListenerAdapter {
+
+    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+
+    // Stockage par salon : Map<UserId, Map<ChannelId, Valeur>>
+    private final Map<Long, Map<Long, Integer>> userChannelMessages = new HashMap<>();
+    private final Map<Long, Map<Long, Long>> userVoiceTimes = new HashMap<>();
+    private final Map<Long, Long> voiceJoinTimes = new HashMap<>();
+
+    // Stockage du nombre d'infractions (mots interdits) par utilisateur pour doubler la durée
+    private final Map<Long, Integer> infractionCounts = new HashMap<>();
+
+    public static void main(String[] args) {
+        String token = "MTU0MTUzMjA5NzY4NzMyMjY2NA.Gh3YD3.dg-dzf7EpHEN-PbbWbcg638oOC8bzOsB-7p6qM"; // Remplace par ton token Discord
+
+        JDABuilder.createDefault(token)
+                .enableIntents(
+                        GatewayIntent.GUILD_MEMBERS,
+                        GatewayIntent.GUILD_MESSAGES,
+                        GatewayIntent.MESSAGE_CONTENT,
+                        GatewayIntent.GUILD_VOICE_STATES
+                )
+                .addEventListeners(new Main())
+                .build();
+    }
+
+    @Override
+    public void onReady(ReadyEvent event) {
+        System.out.println("Le bot est connecté sous le nom : " + event.getJDA().getSelfUser().getAsTag());
+
+        Guild guild = event.getJDA().getGuildById("1459654955513413858");
+
+        if (guild != null) {
+            guild.updateCommands().addCommands(
+                Commands.slash("status", "Vérifie si le bot est en ligne"),
+                Commands.slash("bot", "Commandes relatives au bot")
+                    .addSubcommands(
+                        new SubcommandData("pdp", "Affiche la photo de profil du bot ou d'un membre")
+                            .addOption(OptionType.USER, "membre", "Le membre dont tu veux voir la PDP", false)
+                    ),
+                Commands.slash("avatar", "Affiche l'avatar d'un utilisateur")
+                    .addOption(OptionType.USER, "membre", "Le membre dont tu veux voir l'avatar", false),
+                Commands.slash("clear", "Supprime les messages envoyés après une heure précise")
+                    .addOption(OptionType.STRING, "heure", "Heure cible (ex: 14:30)", true)
+                    .addOption(OptionType.STRING, "date", "Date optionnelle (ex: 25/08/2026)", false)
+                    .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.MESSAGE_MANAGE)),
+                Commands.slash("tempban", "Bannit temporairement un membre")
+                    .addOption(OptionType.USER, "membre", "Le membre à bannir", true)
+                    .addOption(OptionType.STRING, "duree", "Durée du ban (ex: 2h ou 3d)", true)
+                    .addOption(OptionType.STRING, "raison", "Raison du bannissement", true)
+                    .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.BAN_MEMBERS)),
+                Commands.slash("unban", "Débannit un membre")
+                    .addOption(OptionType.USER, "membre", "Le membre à débannir (ou son ID)", true)
+                    .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.BAN_MEMBERS)),
+                Commands.slash("stats", "Affiche tes statistiques d'activité ou celles d'un membre")
+                    .addOption(OptionType.USER, "membre", "Le membre dont tu veux voir les stats", false)
+            ).queue();
+        }
+    }
+
+    @Override
+    public void onSlashCommandInteraction(SlashCommandInteractionEvent event) {
+        if (event.getName().equals("status")) {
+            event.reply("Le bot est en ligne et fonctionnel !").queue();
+        }
+
+        if (event.getName().equals("bot")) {
+            if ("pdp".equals(event.getSubcommandName())) {
+                User target = event.getOption("membre") != null 
+                    ? event.getOption("membre").getAsUser() 
+                    : event.getJDA().getSelfUser();
+
+                String avatarUrl = target.getEffectiveAvatarUrl() + "?size=1024";
+
+                EmbedBuilder embed = new EmbedBuilder()
+                    .setTitle("Photo de profil de " + target.getName())
+                    .setImage(avatarUrl)
+                    .setColor(Color.BLUE);
+
+                event.replyEmbeds(embed.build()).queue();
+            }
+        }
+
+        if (event.getName().equals("avatar")) {
+            User target = event.getOption("membre") != null 
+                ? event.getOption("membre").getAsUser() 
+                : event.getUser();
+
+            String avatarUrl = target.getEffectiveAvatarUrl() + "?size=1024";
+
+            EmbedBuilder embed = new EmbedBuilder()
+                .setTitle("Avatar de " + target.getName())
+                .setImage(avatarUrl)
+                .setColor(Color.BLUE);
+
+            event.replyEmbeds(embed.build()).queue();
+        }
+
+        if (event.getName().equals("clear")) {
+            String heureStr = event.getOption("heure").getAsString();
+            String dateStr = event.getOption("date") != null ? event.getOption("date").getAsString() : null;
+
+            try {
+                LocalTime time = LocalTime.parse(heureStr, DateTimeFormatter.ofPattern("HH:mm"));
+                LocalDate date = dateStr != null 
+                    ? LocalDate.parse(dateStr, DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+                    : LocalDate.now(ZoneId.systemDefault());
+
+                LocalDateTime targetDateTime = LocalDateTime.of(date, time);
+
+                event.deferReply(true).queue();
+
+                TextChannel channel = event.getChannel().asTextChannel();
+                
+                channel.getIterableHistory().takeAsync(100).thenAccept(messages -> {
+                    List<Message> messagesToDelete = new ArrayList<>();
+
+                    for (Message msg : messages) {
+                        LocalDateTime msgTime = msg.getTimeCreated().atZoneSameInstant(ZoneId.systemDefault()).toLocalDateTime();
+
+                        if (msgTime.isAfter(targetDateTime) || msgTime.isEqual(targetDateTime)) {
+                            messagesToDelete.add(msg);
+                        }
+                    }
+
+                    if (messagesToDelete.isEmpty()) {
+                        event.getHook().sendMessage("Aucun message trouvé après l'heure indiquée.").queue();
+                    } else {
+                        channel.purgeMessages(messagesToDelete);
+                        event.getHook().sendMessage("✅ " + messagesToDelete.size() + " message(s) supprimé(s).").queue();
+                    }
+                });
+
+            } catch (Exception e) {
+                event.reply("Format invalide. Utilise `HH:mm` pour l'heure et `JJ/MM/AAAA` pour la date.").setEphemeral(true).queue();
+            }
+        }
+
+        if (event.getName().equals("tempban")) {
+            User targetUser = event.getOption("membre").getAsUser();
+            String dureeStr = event.getOption("duree").getAsString().toLowerCase().trim();
+            String raison = event.getOption("raison").getAsString();
+            Guild guild = event.getGuild();
+
+            if (guild == null) return;
+
+            long millis = parseDurationToMillis(dureeStr);
+
+            if (millis <= 0) {
+                event.reply("❌ Format de durée invalide. Utilise par exemple `2h` (2 heures) ou `3d` (3 jours).").setEphemeral(true).queue();
+                return;
+            }
+
+            String dureeLisible = formatDuration(dureeStr);
+
+            EmbedBuilder embedMp = new EmbedBuilder()
+                .setTitle("⛔ Bannissement temporaire")
+                .setDescription("Tu as été banni temporairement du serveur **" + guild.getName() + "**.\n\n" +
+                                "⏳ **Durée** : " + dureeLisible + "\n" +
+                                "📝 **Raison** : " + raison)
+                .setThumbnail(targetUser.getEffectiveAvatarUrl())
+                .setColor(Color.RED);
+
+            targetUser.openPrivateChannel().queue(privateChannel -> {
+                privateChannel.sendMessageEmbeds(embedMp.build()).queue(
+                    success -> banAndScheduleUnban(event, guild, targetUser, millis, dureeLisible, raison),
+                    error -> banAndScheduleUnban(event, guild, targetUser, millis, dureeLisible, raison)
+                );
+            });
+        }
+
+        if (event.getName().equals("unban")) {
+            User targetUser = event.getOption("membre").getAsUser();
+            Guild guild = event.getGuild();
+
+            if (guild == null) return;
+
+            event.deferReply(true).queue();
+
+            guild.unban(targetUser).queue(
+                success -> {
+                    event.getHook().sendMessage("🔓 **" + targetUser.getName() + "** a été débanni avec succès.").queue();
+
+                    TextChannel logChannel = guild.getTextChannelsByName("logs-admin", true)
+                            .stream().findFirst().orElse(null);
+                    if (logChannel != null) {
+                        logChannel.sendMessage("🔓 **Unban manuel** : " + targetUser.getAsMention() + " a été débanni par " + event.getUser().getAsMention() + ".").queue();
+                    }
+                },
+                error -> event.getHook().sendMessage("❌ Impossible de débannir cet utilisateur. Vérifie qu'il soit bien banni.").queue()
+            );
+        }
+
+        if (event.getName().equals("stats")) {
+            Member targetMember = event.getOption("membre") != null 
+                ? event.getOption("membre").getAsMember() 
+                : event.getMember();
+
+            if (targetMember == null) {
+                event.reply("❌ Impossible de trouver ce membre sur le serveur.").setEphemeral(true).queue();
+                return;
+            }
+
+            event.deferReply().queue();
+
+            long userId = targetMember.getIdLong();
+
+            // Total messages et salon le plus actif
+            Map<Long, Integer> userMsgs = userChannelMessages.getOrDefault(userId, new HashMap<>());
+            int totalMsgs = userMsgs.values().stream().mapToInt(Integer::intValue).sum();
+
+            long topTextChannelId = userMsgs.entrySet().stream()
+                .max(Map.Entry.comparingByValue())
+                .map(Map.Entry::getKey)
+                .orElse(-1L);
+
+            String topTextName = "Aucun";
+            int topTextCount = 0;
+            if (topTextChannelId != -1L) {
+                TextChannel ch = event.getGuild().getTextChannelById(topTextChannelId);
+                if (ch != null) topTextName = "#" + ch.getName();
+                topTextCount = userMsgs.get(topTextChannelId);
+            }
+
+            // Total vocal et salon le plus actif
+            Map<Long, Long> userVoices = userVoiceTimes.getOrDefault(userId, new HashMap<>());
+            long totalVoiceMillis = userVoices.values().stream().mapToLong(Long::longValue).sum();
+
+            if (voiceJoinTimes.containsKey(userId)) {
+                totalVoiceMillis += (System.currentTimeMillis() - voiceJoinTimes.get(userId));
+            }
+
+            long topVoiceChannelId = userVoices.entrySet().stream()
+                .max(Map.Entry.comparingByValue())
+                .map(Map.Entry::getKey)
+                .orElse(-1L);
+
+            String topVoiceName = "Aucun";
+            long topVoiceMillis = 0;
+            if (topVoiceChannelId != -1L) {
+                var ch = event.getGuild().getVoiceChannelById(topVoiceChannelId);
+                if (ch != null) topVoiceName = ch.getName();
+                topVoiceMillis = userVoices.get(topVoiceChannelId);
+            }
+
+            // Formats lisibles
+            long minutesTotal = TimeUnit.MILLISECONDS.toMinutes(totalVoiceMillis) % 60;
+            long heuresTotal = TimeUnit.MILLISECONDS.toHours(totalVoiceMillis);
+            String tempsVocalTotal = heuresTotal + "h " + minutesTotal + "m";
+
+            long topVoiceMin = TimeUnit.MILLISECONDS.toMinutes(topVoiceMillis) % 60;
+            long topVoiceH = TimeUnit.MILLISECONDS.toHours(topVoiceMillis);
+            String topVoiceTimeStr = topVoiceH + "h " + topVoiceMin + "m";
+
+            try {
+                byte[] imageBytes = generateStatsCard(
+                    targetMember,
+                    String.valueOf(totalMsgs),
+                    tempsVocalTotal,
+                    topTextName,
+                    topTextCount + " messages",
+                    topVoiceName,
+                    topVoiceTimeStr
+                );
+
+                event.getHook().sendFiles(FileUpload.fromData(imageBytes, "stats.png")).queue();
+
+            } catch (Exception e) {
+                e.printStackTrace();
+                event.getHook().sendMessage("❌ Erreur lors de la génération du graphique des statistiques.").queue();
+            }
+        }
+    }
+
+    private byte[] generateStatsCard(
+        Member member, 
+        String messages, 
+        String voiceTime, 
+        String topTextName, 
+        String topTextDetail, 
+        String topVoiceName, 
+        String topVoiceDetail
+    ) throws Exception {
+        int width = 720;
+        int height = 360;
+
+        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = image.createGraphics();
+
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+
+        // Fond principal
+        g.setColor(new Color(28, 29, 34));
+        g.fill(new RoundRectangle2D.Float(0, 0, width, height, 24, 24));
+
+        // Avatar
+        BufferedImage avatar;
+        try {
+            URL url = new URL(member.getUser().getEffectiveAvatarUrl() + "?size=128");
+            avatar = ImageIO.read(url);
+        } catch (Exception e) {
+            avatar = new BufferedImage(54, 54, BufferedImage.TYPE_INT_ARGB);
+        }
+
+        BufferedImage circularAvatar = new BufferedImage(54, 54, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D gAvatar = circularAvatar.createGraphics();
+        gAvatar.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        gAvatar.setClip(new java.awt.geom.Ellipse2D.Float(0, 0, 54, 54));
+        gAvatar.drawImage(avatar, 0, 0, 54, 54, null);
+        gAvatar.dispose();
+
+        g.drawImage(circularAvatar, 20, 20, null);
+
+        // Informations utilisateur
+        g.setColor(Color.WHITE);
+        g.setFont(new Font("SansSerif", Font.BOLD, 20));
+        g.drawString(member.getEffectiveName(), 86, 42);
+
+        // Nom du serveur
+        String serverName = member.getGuild().getName();
+        g.setFont(new Font("SansSerif", Font.PLAIN, 12));
+        g.setColor(new Color(235, 180, 50));
+        g.drawString(serverName, 86, 62);
+
+        // Badges supérieurs
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.FRENCH);
+        String createdDate = member.getUser().getTimeCreated().format(formatter);
+        String joinedDate = member.getTimeJoined().format(formatter);
+
+        drawHeaderBadge(g, 460, 20, "Créé le", createdDate);
+        drawHeaderBadge(g, 585, 20, "Rejoint le", joinedDate);
+
+        // Bloc 1: Classements
+        drawContainer(g, 20, 90, 215, 120);
+        g.setColor(new Color(170, 175, 185));
+        g.setFont(new Font("SansSerif", Font.BOLD, 13));
+        g.drawString("Classements", 32, 112);
+        g.setColor(new Color(235, 180, 50));
+        g.drawString("🏆", 205, 112);
+
+        drawRowItem(g, 32, 125, 191, 32, "Messages", "#3");
+        drawRowItem(g, 32, 165, 191, 32, "Vocal", "#4");
+
+        // Bloc 2: Messages
+        drawContainer(g, 252, 90, 215, 120);
+        g.setColor(new Color(170, 175, 185));
+        g.setFont(new Font("SansSerif", Font.BOLD, 13));
+        g.drawString("Messages", 264, 112);
+        g.setColor(new Color(87, 242, 135));
+        g.drawString("💬", 437, 112);
+
+        drawStatBreakdownRow(g, 264, 125, 191, 24, "1j", messages + " msgs");
+        drawStatBreakdownRow(g, 264, 153, 191, 24, "7j", messages + " msgs");
+        drawStatBreakdownRow(g, 264, 181, 191, 24, "30j", messages + " msgs");
+
+        // Bloc 3: Activité Vocale
+        drawContainer(g, 484, 90, 216, 120);
+        g.setColor(new Color(170, 175, 185));
+        g.setFont(new Font("SansSerif", Font.BOLD, 13));
+        g.drawString("Activité Vocale", 496, 112);
+        g.setColor(new Color(235, 69, 158));
+        g.drawString("🔊", 670, 112);
+
+        drawStatBreakdownRow(g, 496, 125, 192, 24, "1j", voiceTime);
+        drawStatBreakdownRow(g, 496, 153, 192, 24, "7j", voiceTime);
+        drawStatBreakdownRow(g, 496, 181, 192, 24, "30j", voiceTime);
+
+        // Bloc 4: Salons Principaux & Activité (dynamique)
+        drawContainer(g, 20, 220, 680, 105);
+        g.setColor(new Color(170, 175, 185));
+        g.setFont(new Font("SansSerif", Font.BOLD, 13));
+        g.drawString("Salons principaux & Activité", 32, 242);
+
+        drawChannelRow(g, 32, 255, 320, 28, "💬 " + topTextName, topTextDetail, new Color(87, 242, 135));
+        drawChannelRow(g, 32, 288, 320, 28, "🔊 " + topVoiceName, topVoiceDetail, new Color(235, 69, 158));
+
+        // Pied de page
+        g.setColor(new Color(120, 125, 135));
+        g.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        g.drawString("Serveur : " + serverName + " — Fuseau : UTC", 20, 345);
+
+        g.setColor(new Color(87, 242, 135));
+        g.fillOval(570, 337, 8, 8);
+        g.setColor(Color.WHITE);
+        g.drawString("Message", 583, 345);
+
+        g.setColor(new Color(235, 69, 158));
+        g.fillOval(645, 337, 8, 8);
+        g.setColor(Color.WHITE);
+        g.drawString("Vocal", 658, 345);
+
+        g.dispose();
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ImageIO.write(image, "png", baos);
+        return baos.toByteArray();
+    }
+
+    private void drawContainer(Graphics2D g, int x, int y, int w, int h) {
+        g.setColor(new Color(38, 40, 46));
+        g.fill(new RoundRectangle2D.Float(x, y, w, h, 14, 14));
+    }
+
+    private void drawHeaderBadge(Graphics2D g, int x, int y, String title, String value) {
+        g.setColor(new Color(42, 44, 51));
+        g.fill(new RoundRectangle2D.Float(x, y, 115, 42, 10, 10));
+
+        g.setColor(new Color(150, 155, 165));
+        g.setFont(new Font("SansSerif", Font.BOLD, 10));
+        g.drawString(title, x + 8, y + 14);
+
+        g.setColor(Color.WHITE);
+        g.setFont(new Font("SansSerif", Font.BOLD, 11));
+        
+        String displayedValue = value;
+        if (displayedValue.length() > 14) {
+            displayedValue = displayedValue.substring(0, 12) + "..";
+        }
+        
+        g.drawString(displayedValue, x + 8, y + 32);
+    }
+
+    private void drawRowItem(Graphics2D g, int x, int y, int w, int h, String label, String value) {
+        g.setColor(new Color(20, 21, 25));
+        g.fill(new RoundRectangle2D.Float(x, y, w, h, 8, 8));
+
+        g.setColor(Color.WHITE);
+        g.setFont(new Font("SansSerif", Font.BOLD, 12));
+        g.drawString(label, x + 10, y + 20);
+
+        g.setColor(new Color(200, 205, 215));
+        g.drawString(value, x + w - 30, y + 20);
+    }
+
+    private void drawStatBreakdownRow(Graphics2D g, int x, int y, int w, int h, String tag, String val) {
+        g.setColor(new Color(20, 21, 25));
+        g.fill(new RoundRectangle2D.Float(x, y, w, h, 6, 6));
+
+        g.setColor(Color.WHITE);
+        g.setFont(new Font("SansSerif", Font.BOLD, 11));
+        g.drawString(tag, x + 10, y + 16);
+
+        g.setColor(new Color(180, 185, 195));
+        g.setFont(new Font("SansSerif", Font.PLAIN, 12));
+        g.drawString(val, x + 40, y + 16);
+    }
+
+    private void drawChannelRow(Graphics2D g, int x, int y, int w, int h, String channel, String count, Color accentColor) {
+        g.setColor(new Color(20, 21, 25));
+        g.fill(new RoundRectangle2D.Float(x, y, w, h, 6, 6));
+
+        g.setColor(accentColor);
+        g.setFont(new Font("SansSerif", Font.BOLD, 12));
+        g.drawString(channel, x + 10, y + 18);
+
+        g.setColor(Color.WHITE);
+        g.setFont(new Font("SansSerif", Font.PLAIN, 12));
+        g.drawString(count, x + w - 90, y + 18);
+    }
+
+    private long parseDurationToMillis(String input) {
+        Pattern pattern = Pattern.compile("^(\\d+)([hd])$");
+        Matcher matcher = pattern.matcher(input);
+
+        if (!matcher.matches()) return -1;
+
+        long val = Long.parseLong(matcher.group(1));
+        String unit = matcher.group(2);
+
+        if ("h".equals(unit)) {
+            return TimeUnit.HOURS.toMillis(val);
+        } else if ("d".equals(unit)) {
+            return TimeUnit.DAYS.toMillis(val);
+        }
+
+        return -1;
+    }
+
+    private String formatDuration(String input) {
+        Pattern pattern = Pattern.compile("^(\\d+)([hd])$");
+        Matcher matcher = pattern.matcher(input);
+
+        if (!matcher.matches()) return input;
+
+        long val = Long.parseLong(matcher.group(1));
+        String unit = matcher.group(2);
+
+        if ("h".equals(unit)) {
+            return val + " heure(s)";
+        } else {
+            return val + " jour(s)";
+        }
+    }
+
+    private void banAndScheduleUnban(SlashCommandInteractionEvent event, Guild guild, User targetUser, long millis, String dureeLisible, String raison) {
+        guild.ban(targetUser, 0, TimeUnit.DAYS).reason(raison + " (Tempban)").queue(
+            success -> {
+                event.reply("🔨 **" + targetUser.getName() + "** a été banni pour **" + dureeLisible + "**. Raison : " + raison).setEphemeral(true).queue();
+
+                TextChannel logChannel = guild.getTextChannelsByName("logs-admin", true)
+                        .stream().findFirst().orElse(null);
+                if (logChannel != null) {
+                    logChannel.sendMessage("🔨 **Tempban** : " + targetUser.getAsMention() + " banni par " + event.getUser().getAsMention() + " pendant " + dureeLisible + ". Raison : `" + raison + "`").queue();
+                }
+
+                scheduler.schedule(() -> {
+                    guild.unban(targetUser).queue(
+                        unbanSuccess -> {
+                            if (logChannel != null) {
+                                logChannel.sendMessage("🔓 **Déban automatique** : " + targetUser.getAsMention() + " a été débanni après la fin de sa peine.").queue();
+                            }
+                        },
+                        unbanError -> {}
+                    );
+                }, millis, TimeUnit.MILLISECONDS);
+            },
+            error -> event.reply("❌ Impossible de bannir cet utilisateur (permissions insuffisantes).").setEphemeral(true).queue()
+        );
+    }
+
+    @Override
+    public void onGuildMemberJoin(GuildMemberJoinEvent event) {
+        TextChannel channel = event.getGuild().getTextChannelsByName("🧳-arrivées", true)
+                .stream().findFirst().orElse(null);
+
+        if (channel != null) {
+            int memberCount = event.getGuild().getMemberCount();
+
+            EmbedBuilder embed = new EmbedBuilder()
+                .setTitle("Bienvenue ! 👋")
+                .setDescription("Salut " + event.getMember().getAsMention() + ", ravis de t'avoir parmi nous sur **" + event.getGuild().getName() + "** ! Prends tes aises.\n\n👥 *Nous sommes désormais **" + memberCount + "** membres sur le serveur !*")
+                .setThumbnail(event.getUser().getEffectiveAvatarUrl())
+                .setColor(Color.GREEN);
+
+            channel.sendMessageEmbeds(embed.build()).queue();
+        }
+    }
+
+    @Override
+    public void onGuildMemberRemove(GuildMemberRemoveEvent event) {
+        TextChannel channel = event.getGuild().getTextChannelsByName("🧳-départs", true)
+                .stream().findFirst().orElse(null);
+
+        if (channel != null) {
+            EmbedBuilder embed = new EmbedBuilder()
+                .setTitle("À la prochaine ! 👋")
+                .setDescription("**" + event.getUser().getName() + "** a quitté le serveur.")
+                .setThumbnail(event.getUser().getEffectiveAvatarUrl())
+                .setColor(Color.RED);
+
+            channel.sendMessageEmbeds(embed.build()).queue();
+        }
+    }
+
+    @Override
+    public void onGuildVoiceUpdate(GuildVoiceUpdateEvent event) {
+        long userId = event.getMember().getIdLong();
+
+        if (event.getChannelJoined() != null && event.getChannelLeft() == null) {
+            voiceJoinTimes.put(userId, System.currentTimeMillis());
+        } 
+        else if (event.getChannelLeft() != null) {
+            if (voiceJoinTimes.containsKey(userId)) {
+                long duration = System.currentTimeMillis() - voiceJoinTimes.remove(userId);
+                long channelId = event.getChannelLeft().getIdLong();
+
+                userVoiceTimes
+                    .computeIfAbsent(userId, k -> new HashMap<>())
+                    .merge(channelId, duration, Long::sum);
+            }
+
+            if (event.getChannelJoined() != null) {
+                voiceJoinTimes.put(userId, System.currentTimeMillis());
+            }
+        }
+    }
+
+    @Override
+    public void onMessageReceived(MessageReceivedEvent event) {
+        if (event.getAuthor().isBot() || !event.isFromGuild()) return;
+
+        long userId = event.getAuthor().getIdLong();
+        long channelId = event.getChannel().getIdLong();
+
+        // Enregistrement des statistiques par salon textuel
+        userChannelMessages
+            .computeIfAbsent(userId, k -> new HashMap<>())
+            .merge(channelId, 1, Integer::sum);
+
+        // --- SYSTÈME DE MODÉRATION ET DOUBLEMENT DE MUTE ---
+        List<String> motsInterdits = List.of("negro", "negger", "neger", "niga", "nigga", "nega", "negga", "nigger", "négro", "nig", "niggah", "neggre", "negre");
+        String message = event.getMessage().getContentRaw().toLowerCase();
+
+        for (String mot : motsInterdits) {
+            if (message.contains(mot)) {
+
+                // 1. Décompte de la récividive global (indépendant du mot spécifique)
+                int numInfractions = infractionCounts.getOrDefault(userId, 0) + 1;
+                infractionCounts.put(userId, numInfractions);
+
+                // 2. Durée doublée à chaque fois : 5 * 2^(n-1) -> 5m, 10m, 20m, 40m...
+                long minutesToMute = 5 * (long) Math.pow(2, numInfractions - 1);
+
+                // 3. Application du mute
+                event.getMember().timeoutFor(minutesToMute, TimeUnit.MINUTES)
+                    .reason("Utilisation d'un mot interdit (Infraction n°" + numInfractions + ") : " + mot)
+                    .queue(
+                        success -> {
+                            event.getMessage().delete().queue(null, error -> {});
+
+                            String dureeStr = minutesToMute + " minute" + (minutesToMute > 1 ? "s" : "");
+
+                            EmbedBuilder embedMod = new EmbedBuilder()
+                                .setTitle("🚫 Mute Automatique")
+                                .setColor(Color.RED)
+                                .setDescription(event.getAuthor().getAsMention() + " a été rendu muet.")
+                                .addField("Mot détecté", "`" + mot + "`", true)
+                                .addField("Durée du mute", "**" + dureeStr + "**", true)
+                                .addField("Niveau d'infraction", "Récidive n°" + numInfractions, true)
+                                .setTimestamp(LocalDateTime.now());
+
+                            // Message privé à l'utilisateur
+                            event.getAuthor().openPrivateChannel().queue(privateChannel -> {
+                                privateChannel.sendMessageEmbeds(
+                                    new EmbedBuilder()
+                                        .setTitle("🚫 Tu as été rendu muet")
+                                        .setDescription("Tu as été rendu muet sur **" + event.getGuild().getName() + "** pendant **" + dureeStr + "** pour avoir utilisé un mot interdit.")
+                                        .addField("Récidive", "Infraction n°" + numInfractions + " (la durée est doublée à chaque écart).", false)
+                                        .setColor(Color.RED)
+                                        .build()
+                                ).queue(null, error -> {});
+                            });
+
+                            // Logs administrateur
+                            TextChannel logChannel = event.getGuild().getTextChannelsByName("logs-admin", true)
+                                    .stream().findFirst().orElse(null);
+
+                            if (logChannel != null) {
+                                logChannel.sendMessageEmbeds(embedMod.build()).queue();
+                            }
+                        },
+                        error -> {
+                            TextChannel logChannel = event.getGuild().getTextChannelsByName("logs-admin", true)
+                                    .stream().findFirst().orElse(null);
+
+                            if (logChannel != null) {
+                                logChannel.sendMessage(
+                                    "⚠️ Impossible de mute " + event.getAuthor().getAsMention() 
+                                    + " pour le mot `" + mot + "` (permissions insuffisantes ou rôle supérieur)."
+                                ).queue();
+                            }
+                        }
+                    );
+                break;
+            }
+        }
+    }
+}
