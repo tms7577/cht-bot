@@ -55,7 +55,10 @@ public class Main extends ListenerAdapter {
     private final Map<Long, Integer> infractionCounts = new HashMap<>();
 
     public static void main(String[] args) {
-        String token = "MTU0MTUzMjA5NzY4NzMyMjY2NA.Gh3YD3.dg-dzf7EpHEN-PbbWbcg638oOC8bzOsB-7p6qM"; // Remplace par ton token Discord
+     String token = System.getenv("DISCORD_TOKEN");
+if (token == null) {
+    throw new IllegalArgumentException("La variable d'environnement DISCORD_TOKEN n'est pas définie !");
+}
 
         JDABuilder.createDefault(token)
                 .enableIntents(
