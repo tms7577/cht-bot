@@ -619,7 +619,7 @@ public class Main extends ListenerAdapter {
 
                             if (logChannel != null) {
                                 logChannel.sendMessage(
-                                    "⚠️ Impossible de mute " + event.getAuthor().getAsMention() 
+                                    "⚠️️ Impossible de mute " + event.getAuthor().getAsMention() 
                                     + " pour le mot `" + mot + "` (permissions insuffisantes ou rôle supérieur)."
                                 ).queue();
                             }
@@ -629,28 +629,23 @@ public class Main extends ListenerAdapter {
             }
         }
 
-        // 2. Vérification élargie et robuste pour les GIFs, pièces jointes et embeds
+        // 2. Autoriser uniquement les pièces jointes (images/fichiers) et les liens de GIFs (Tenor/Giphy/Imgur)
         boolean hasAttachments = !event.getMessage().getAttachments().isEmpty();
         
-        boolean isGifLink = lowerCaseContent.contains("tenor.com") 
-                         || lowerCaseContent.contains("giphy.com") 
-                         || lowerCaseContent.contains("imgur.com")
-                         || lowerCaseContent.contains(".gif")
-                         || lowerCaseContent.contains(".webp");
+        boolean isGifLink = lowerCaseContent.contains("tenor.com/view/") 
+                         || lowerCaseContent.contains("giphy.com/gifs/") 
+                         || lowerCaseContent.contains("imgur.com/")
+                         || lowerCaseContent.endsWith(".gif")
+                         || lowerCaseContent.endsWith(".webp")
+                         || lowerCaseContent.endsWith(".png")
+                         || lowerCaseContent.endsWith(".jpg")
+                         || lowerCaseContent.endsWith(".jpeg");
 
-        boolean hasRichEmbed = !event.getMessage().getEmbeds().isEmpty() && 
-                               event.getMessage().getEmbeds().stream().anyMatch(e -> 
-                                   (e.getImage() != null) || 
-                                   (e.getThumbnail() != null) ||
-                                   (e.getVideoInfo() != null) ||
-                                   (e.getUrl() != null && (e.getUrl().contains("tenor.com") || e.getUrl().contains("giphy.com")))
-                               );
-
-        if (hasAttachments || isGifLink || hasRichEmbed) {
+        if (hasAttachments || isGifLink) {
             return; 
         }
 
-        // 3. Bloquer les autres liens et invitations Discord
+        // 3. Bloquer tous les autres liens, sites web et invitations Discord
         Pattern linkPattern = Pattern.compile("(?i)\\b((https?|ftp|file)://[-a-zA-Z0-9+&@#/%?=~_|!:,.;]*[-a-zA-Z0-9+&@#/%=~_|]|www\\.[-a-zA-Z0-9+&@#/%?=~_|!:,.;]*[-a-zA-Z0-9+&@#/%=~_|]|discord\\.gg/[a-zA-Z0-9]+|discord(app)?\\.com/invite/[a-zA-Z0-9]+)\\b");
         Matcher matcher = linkPattern.matcher(messageContent);
 
