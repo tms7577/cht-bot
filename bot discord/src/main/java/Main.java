@@ -50,6 +50,9 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import com.sun.net.httpserver.HttpServer;
+import java.net.InetSocketAddress;
+import java.io.OutputStream;
 
 public class Main extends ListenerAdapter {
 
@@ -63,19 +66,35 @@ public class Main extends ListenerAdapter {
     // Stockage du nombre d'infractions (mots interdits) par utilisateur pour doubler la durée
     private final Map<Long, Integer> infractionCounts = new HashMap<>();
 
-    public static void main(String[] args) {
-        String token = "MTU0MTUzMjA5NzY4NzMyMjY2NA.G73NOH.VRUhij_uMoJu1G5LU3vjNk_BzpqDvGH-7v6wNw"; // Remplace par ton token Discord
+public static void main(String[] args) throws Exception {
+    // Mini-serveur web pour garder Render content (Health Check)
+    int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
+    HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
+    server.createContext("/", exchange -> {
+        String response = "Bot is running!";
+        exchange.sendResponseHeaders(200, response.length());
+        OutputStream os = exchange.getResponseBody();
+        os.write(response.getBytes());
+        os.close();
+    });
+    server.start();
 
-        JDABuilder.createDefault(token)
-                .enableIntents(
-                        GatewayIntent.GUILD_MEMBERS,
-                        GatewayIntent.GUILD_MESSAGES,
-                        GatewayIntent.MESSAGE_CONTENT,
-                        GatewayIntent.GUILD_VOICE_STATES
-                )
-                .addEventListeners(new Main())
-                .build();
+    // Récupération du token
+    String token = System.getenv("DISCORD_TOKEN");
+    if (token == null) {
+        throw new IllegalArgumentException("La variable d'environnement DISCORD_TOKEN n'est pas définie !");
     }
+
+    JDABuilder.createDefault(token)
+            .enableIntents(
+                    GatewayIntent.GUILD_MEMBERS,
+                    GatewayIntent.GUILD_MESSAGES,
+                    GatewayIntent.MESSAGE_CONTENT,
+                    GatewayIntent.GUILD_VOICE_STATES
+            )
+            .addEventListeners(new Main())
+            .build();
+}
 
     @Override
     public void onReady(ReadyEvent event) {
