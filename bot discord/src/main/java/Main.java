@@ -4,12 +4,16 @@ import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.entities.Role;
 import net.dv8tion.jda.api.entities.User;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.events.guild.member.GuildMemberJoinEvent;
 import net.dv8tion.jda.api.events.guild.member.GuildMemberRemoveEvent;
 import net.dv8tion.jda.api.events.guild.voice.GuildVoiceUpdateEvent;
+import net.dv8tion.jda.api.events.interaction.ModalInteractionEvent;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
+import net.dv8tion.jda.api.events.interaction.component.ButtonInteractionEvent;
+import net.dv8tion.jda.api.events.interaction.component.StringSelectInteractionEvent;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.events.session.ReadyEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
@@ -17,6 +21,11 @@ import net.dv8tion.jda.api.interactions.commands.DefaultMemberPermissions;
 import net.dv8tion.jda.api.interactions.commands.OptionType;
 import net.dv8tion.jda.api.interactions.commands.build.Commands;
 import net.dv8tion.jda.api.interactions.commands.build.SubcommandData;
+import net.dv8tion.jda.api.interactions.components.buttons.Button;
+import net.dv8tion.jda.api.interactions.components.selections.StringSelectMenu;
+import net.dv8tion.jda.api.interactions.components.text.TextInput;
+import net.dv8tion.jda.api.interactions.components.text.TextInputStyle;
+import net.dv8tion.jda.api.interactions.modals.Modal;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 import net.dv8tion.jda.api.utils.FileUpload;
 
@@ -41,9 +50,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import com.sun.net.httpserver.HttpServer;
-import java.net.InetSocketAddress;
-import java.io.OutputStream;
 
 public class Main extends ListenerAdapter {
 
@@ -57,35 +63,19 @@ public class Main extends ListenerAdapter {
     // Stockage du nombre d'infractions (mots interdits) par utilisateur pour doubler la durée
     private final Map<Long, Integer> infractionCounts = new HashMap<>();
 
- public static void main(String[] args) throws Exception {
-    // Mini-serveur web pour garder Render content (Health Check)
-    int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
-    HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
-    server.createContext("/", exchange -> {
-        String response = "Bot is running!";
-        exchange.sendResponseHeaders(200, response.length());
-        OutputStream os = exchange.getResponseBody();
-        os.write(response.getBytes());
-        os.close();
-    });
-    server.start();
+    public static void main(String[] args) {
+        String token = "MTU0MTUzMjA5NzY4NzMyMjY2NA.G73NOH.VRUhij_uMoJu1G5LU3vjNk_BzpqDvGH-7v6wNw"; // Remplace par ton token Discord
 
-    // Récupération du token
-    String token = System.getenv("DISCORD_TOKEN");
-    if (token == null) {
-        throw new IllegalArgumentException("La variable d'environnement DISCORD_TOKEN n'est pas définie !");
+        JDABuilder.createDefault(token)
+                .enableIntents(
+                        GatewayIntent.GUILD_MEMBERS,
+                        GatewayIntent.GUILD_MESSAGES,
+                        GatewayIntent.MESSAGE_CONTENT,
+                        GatewayIntent.GUILD_VOICE_STATES
+                )
+                .addEventListeners(new Main())
+                .build();
     }
-
-    JDABuilder.createDefault(token)
-            .enableIntents(
-                    GatewayIntent.GUILD_MEMBERS,
-                    GatewayIntent.GUILD_MESSAGES,
-                    GatewayIntent.MESSAGE_CONTENT,
-                    GatewayIntent.GUILD_VOICE_STATES
-            )
-            .addEventListeners(new Main())
-            .build();
-}
 
     @Override
     public void onReady(ReadyEvent event) {
@@ -116,7 +106,11 @@ public class Main extends ListenerAdapter {
                     .addOption(OptionType.USER, "membre", "Le membre à débannir (ou son ID)", true)
                     .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.BAN_MEMBERS)),
                 Commands.slash("stats", "Affiche tes statistiques d'activité ou celles d'un membre")
-                    .addOption(OptionType.USER, "membre", "Le membre dont tu veux voir les stats", false)
+                    .addOption(OptionType.USER, "membre", "Le membre dont tu veux voir les stats", false),
+                Commands.slash("setup-ticket", "Affiche le panneau avec catégories de tickets")
+                    .addOption(OptionType.CHANNEL, "salon", "Salon où afficher le panneau", true)
+                    .addOption(OptionType.ROLE, "role-staff", "Rôle du staff ayant accès aux tickets", true)
+                    .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.ADMINISTRATOR))
             ).queue();
         }
     }
@@ -332,6 +326,144 @@ public class Main extends ListenerAdapter {
                 e.printStackTrace();
                 event.getHook().sendMessage("❌ Erreur lors de la génération du graphique des statistiques.").queue();
             }
+        }
+
+        if (event.getName().equals("setup-ticket")) {
+            TextChannel targetChannel = event.getOption("salon").getAsChannel().asTextChannel();
+            Role staffRole = event.getOption("role-staff").getAsRole();
+
+            EmbedBuilder embed = new EmbedBuilder()
+                .setTitle("🎫 Centre d'Assistance & Tickets")
+                .setDescription("Besoin d'aide ou de contacter l'équipe du serveur ?\n\n" +
+                                "📌 **Sélectionnez la raison de votre demande ci-dessous** pour ouvrir un ticket privé.")
+                .setColor(Color.CYAN)
+                .setFooter("Système de Ticket • " + event.getGuild().getName(), event.getGuild().getIconUrl());
+
+            StringSelectMenu selectMenu = StringSelectMenu.create("ticket_reason_select:" + staffRole.getId())
+                .setPlaceholder("👉 Choisissez la raison de votre ticket...")
+                .addOption("❓ Question / Aide", "aide", "Vous avez une question générale ou besoin d'assistance.")
+                .addOption("🚨 Signalement", "signalement", "Signaler un joueur, un problème ou un comportement.")
+                .addOption("💼 Recrutement / Partenariat", "recrutement", "Proposer une candidature ou un partenariat.")
+                .addOption("📝 Autre demande", "autre", "Pour tout autre sujet particulier.")
+                .build();
+
+            targetChannel.sendMessageEmbeds(embed.build()).setActionRow(selectMenu).queue(
+                success -> event.reply("✅ Panneau de tickets configuré avec succès dans " + targetChannel.getAsMention()).setEphemeral(true).queue(),
+                error -> event.reply("❌ Erreur lors de la configuration.").setEphemeral(true).queue()
+            );
+        }
+    }
+
+    @Override
+    public void onStringSelectInteraction(StringSelectInteractionEvent event) {
+        if (event.getComponentId().startsWith("ticket_reason_select:")) {
+            String staffRoleId = event.getComponentId().split(":")[1];
+            String selectedReason = event.getValues().get(0);
+
+            String reasonLabel = switch (selectedReason) {
+                case "aide" -> "Question / Aide";
+                case "signalement" -> "Signalement";
+                case "recrutement" -> "Recrutement / Partenariat";
+                default -> "Autre demande";
+            };
+
+            TextInput subjectInput = TextInput.create("ticket_subject", "Sujet principal", TextInputStyle.SHORT)
+                    .setPlaceholder("Ex: Problème avec un rôle / Question sur les règles")
+                    .setRequiredRange(3, 100)
+                    .setRequired(true)
+                    .build();
+
+            TextInput descriptionInput = TextInput.create("ticket_description", "Explication détaillée", TextInputStyle.PARAGRAPH)
+                    .setPlaceholder("Décrivez votre demande en détail ici...")
+                    .setRequiredRange(10, 1000)
+                    .setRequired(true)
+                    .build();
+
+            Modal modal = Modal.create("ticket_modal:" + selectedReason + ":" + staffRoleId, "Ticket : " + reasonLabel)
+                    .addActionRow(subjectInput)
+                    .addActionRow(descriptionInput)
+                    .build();
+
+            event.replyModal(modal).queue();
+        }
+    }
+
+    @Override
+    public void onModalInteraction(ModalInteractionEvent event) {
+        if (event.getModalId().startsWith("ticket_modal:")) {
+            String[] parts = event.getModalId().split(":");
+            String reasonType = parts[1];
+            String staffRoleId = parts[2];
+
+            String subject = event.getValue("ticket_subject").getAsString();
+            String description = event.getValue("ticket_description").getAsString();
+
+            Guild guild = event.getGuild();
+            Member member = event.getMember();
+            if (guild == null || member == null) return;
+
+            String channelName = "ticket-" + member.getUser().getName().toLowerCase();
+
+            boolean ticketExists = guild.getTextChannels().stream()
+                    .anyMatch(c -> c.getName().equals(channelName));
+
+            if (ticketExists) {
+                event.reply("❌ Tu as déjà un ticket ouvert !").setEphemeral(true).queue();
+                return;
+            }
+
+            event.deferReply(true).queue();
+
+            Role staffRole = guild.getRoleById(staffRoleId);
+
+            List<Permission> allowPerms = List.of(Permission.VIEW_CHANNEL, Permission.MESSAGE_SEND, Permission.MESSAGE_ATTACH_FILES);
+            List<Permission> denyPerms = List.of(Permission.VIEW_CHANNEL);
+
+            String reasonTitle = switch (reasonType) {
+                case "aide" -> "❓ Question / Aide";
+                case "signalement" -> "🚨 Signalement";
+                case "recrutement" -> "💼 Recrutement / Partenariat";
+                default -> "📝 Autre demande";
+            };
+
+            guild.createTextChannel(channelName)
+                .addPermissionOverride(guild.getPublicRole(), null, denyPerms)
+                .addPermissionOverride(member, allowPerms, null)
+                .queue(ticketChannel -> {
+                    if (staffRole != null) {
+                        ticketChannel.upsertPermissionOverride(staffRole).setAllowed(allowPerms).queue();
+                    }
+
+                    EmbedBuilder embedTicket = new EmbedBuilder()
+                        .setTitle("🎫 Ticket : " + subject)
+                        .setColor(Color.GREEN)
+                        .addField("👤 Membre", member.getAsMention(), true)
+                        .addField("📌 Catégorie", reasonTitle, true)
+                        .addField("📄 Description", description, false)
+                        .setFooter("Pour fermer ce ticket, cliquez sur le bouton ci-dessous.");
+
+                    Button closeButton = Button.danger("ticket_close", "🔒 Fermer le ticket");
+
+                    ticketChannel.sendMessage(member.getAsMention() + (staffRole != null ? " " + staffRole.getAsMention() : ""))
+                        .setEmbeds(embedTicket.build())
+                        .setActionRow(closeButton)
+                        .queue();
+
+                    event.getHook().sendMessage("✅ Ton ticket a été créé avec succès : " + ticketChannel.getAsMention()).queue();
+                });
+        }
+    }
+
+    @Override
+    public void onButtonInteraction(ButtonInteractionEvent event) {
+        if (event.getComponentId().equals("ticket_close")) {
+            event.reply("🔒 Ce ticket sera fermé et supprimé dans 5 secondes...").queue();
+
+            scheduler.schedule(() -> {
+                if (event.getChannel() != null) {
+                    event.getChannel().delete().queue();
+                }
+            }, 5, TimeUnit.SECONDS);
         }
     }
 
@@ -658,14 +790,11 @@ public class Main extends ListenerAdapter {
         for (String mot : motsInterdits) {
             if (message.contains(mot)) {
 
-                // 1. Décompte de la récividive global (indépendant du mot spécifique)
                 int numInfractions = infractionCounts.getOrDefault(userId, 0) + 1;
                 infractionCounts.put(userId, numInfractions);
 
-                // 2. Durée doublée à chaque fois : 5 * 2^(n-1) -> 5m, 10m, 20m, 40m...
                 long minutesToMute = 5 * (long) Math.pow(2, numInfractions - 1);
 
-                // 3. Application du mute
                 event.getMember().timeoutFor(minutesToMute, TimeUnit.MINUTES)
                     .reason("Utilisation d'un mot interdit (Infraction n°" + numInfractions + ") : " + mot)
                     .queue(
@@ -683,7 +812,6 @@ public class Main extends ListenerAdapter {
                                 .addField("Niveau d'infraction", "Récidive n°" + numInfractions, true)
                                 .setTimestamp(LocalDateTime.now());
 
-                            // Message privé à l'utilisateur
                             event.getAuthor().openPrivateChannel().queue(privateChannel -> {
                                 privateChannel.sendMessageEmbeds(
                                     new EmbedBuilder()
@@ -695,7 +823,6 @@ public class Main extends ListenerAdapter {
                                 ).queue(null, error -> {});
                             });
 
-                            // Logs administrateur
                             TextChannel logChannel = event.getGuild().getTextChannelsByName("logs-admin", true)
                                     .stream().findFirst().orElse(null);
 
