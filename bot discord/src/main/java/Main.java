@@ -380,7 +380,7 @@ public class Main extends ListenerAdapter {
             EmbedBuilder embed = new EmbedBuilder()
                 .setTitle("🎵 Notifications TikTok configurées")
                 .setDescription("Les alertes pour le compte **" + username + "** ont été activées dans ce salon !\n\n" +
-                                "⚠️ *Note : Les notifications automatiques s'afficheront ici dès qu'une nouvelle vidéo sera publiée.*")
+                                "⚠️️ *Note : Les notifications automatiques s'afficheront ici dès qu'une nouvelle vidéo sera publiée.*")
                 .setColor(new Color(254, 44, 85)) // Couleur TikTok
                 .setFooter("TikTok Tracker • " + event.getGuild().getName());
 
@@ -501,6 +501,48 @@ public class Main extends ListenerAdapter {
                     event.getChannel().delete().queue();
                 }
             }, 5, TimeUnit.SECONDS);
+        }
+    }
+
+    // ==========================================
+    // FILTRE ANTI-LIENS (AVEC EXCEPTION GIFS)
+    // ==========================================
+    @Override
+    public void onMessageReceived(MessageReceivedEvent event) {
+        if (event.getAuthor().isBot() || !event.isFromGuild()) {
+            return;
+        }
+
+        Member member = event.getMember();
+        if (member == null) return;
+
+        // Laisser passer les admins et modérateurs
+        if (member.hasPermission(Permission.ADMINISTRATOR) || member.hasPermission(Permission.MESSAGE_MANAGE)) {
+            return;
+        }
+
+        String messageContent = event.getMessage().getContentRaw();
+
+        // 1. Autoriser les liens Tenor et Giphy (GIFs)
+        boolean isGifLink = messageContent.contains("tenor.com") || messageContent.contains("giphy.com");
+        if (isGifLink) {
+            return; 
+        }
+
+        // 2. Bloquer les autres liens et invitations Discord
+        Pattern linkPattern = Pattern.compile("(?i)\\b((https?|ftp|file)://[-a-zA-Z0-9+&@#/%?=~_|!:,.;]*[-a-zA-Z0-9+&@#/%=~_|]|www\\.[-a-zA-Z0-9+&@#/%?=~_|!:,.;]*[-a-zA-Z0-9+&@#/%=~_|]|discord\\.gg/[a-zA-Z0-9]+|discord(app)?\\.com/invite/[a-zA-Z0-9]+)\\b");
+        Matcher matcher = linkPattern.matcher(messageContent);
+
+        if (matcher.find()) {
+            event.getMessage().delete().queue(
+                success -> {
+                    event.getChannel().sendMessage(member.getAsMention() + " ❌ Les liens ne sont pas autorisés sur ce serveur !")
+                        .queue(msg -> {
+                            scheduler.schedule(() -> msg.delete().queue(s -> {}, e -> {}), 5, TimeUnit.SECONDS);
+                        });
+                },
+                error -> {}
+            );
         }
     }
 
@@ -690,50 +732,37 @@ public class Main extends ListenerAdapter {
         long val = Long.parseLong(matcher.group(1));
         String unit = matcher.group(2);
 
-        if ("h".equals(unit)) {
+        if (unit.equals("h")) {
             return TimeUnit.HOURS.toMillis(val);
-        } else if ("d".equals(unit)) {
+        } else if (unit.equals("d")) {
             return TimeUnit.DAYS.toMillis(val);
         }
-
         return -1;
     }
 
     private String formatDuration(String input) {
-        Pattern pattern = Pattern.compile("^(\\d+)([hd])$");
-        Matcher matcher = pattern.matcher(input);
-
-        if (!matcher.matches()) return input;
-
-        long val = Long.parseLong(matcher.group(1));
-        String unit = matcher.group(2);
-
-        if ("h".equals(unit)) {
-            return val + " heure(s)";
-        } else {
-            return val + " jour(s)";
-        }
+        return input.replace("h", " heure(s)").replace("d", " jour(s)");
     }
 
     private void banAndScheduleUnban(SlashCommandInteractionEvent event, Guild guild, User targetUser, long millis, String dureeLisible, String raison) {
-        guild.ban(targetUser, 0, TimeUnit.DAYS).reason(raison + " (Tempban)").queue(
+        guild.ban(targetUser, 0, java.util.concurrent.TimeUnit.SECONDS).reason(raison).queue(
             success -> {
-                event.reply("🔨 **" + targetUser.getName() + "** a été banni pour **" + dureeLisible + "**. Raison : " + raison).setEphemeral(true).queue();
+                event.reply("⛔ **" + targetUser.getName() + "** a été banni temporairement pour **" + dureeLisible + "**.").setEphemeral(true).queue();
 
                 TextChannel logChannel = guild.getTextChannelsByName("logs-admin", true)
                         .stream().findFirst().orElse(null);
                 if (logChannel != null) {
-                    logChannel.sendMessage("🔨 **Tempban** : " + targetUser.getAsMention() + " a été banni pour " + dureeLisible + ". Raison : " + raison).queue();
+                    logChannel.sendMessage("⛔ **Tempban** : " + targetUser.getAsMention() + " a été banni par " + event.getUser().getAsMention() + ".\n⏳ **Durée** : " + dureeLisible + "\n📝 **Raison** : " + raison).queue();
                 }
 
                 scheduler.schedule(() -> {
                     guild.unban(targetUser).queue(
-                        unbanSuccess -> {
+                        s -> {
                             if (logChannel != null) {
                                 logChannel.sendMessage("🔓 **Fin du Tempban** : " + targetUser.getAsMention() + " a été automatiquement débanni.").queue();
                             }
                         },
-                        unbanError -> {}
+                        e -> {}
                     );
                 }, millis, TimeUnit.MILLISECONDS);
             },
