@@ -63,9 +63,6 @@ public class Main extends ListenerAdapter {
     private final Map<Long, Long> voiceJoinTimes = new HashMap<>();
     private final Map<Long, Integer> infractionCounts = new HashMap<>();
 
-    // Liste des mots interdits pour le mute automatique
-    private final List<String> forbiddenWords = List.of("negro", "negger", "neger", "niga", "nigga", "nega", "negga", "nigger", "négro", "nig", "niggah", "neggre", "negre"); // Remplace par tes mots
-
     public static void main(String[] args) throws Exception {
         int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
         HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
@@ -230,21 +227,7 @@ public class Main extends ListenerAdapter {
             }
 
             String dureeLisible = formatDuration(dureeStr);
-
-            EmbedBuilder embedMp = new EmbedBuilder()
-                .setTitle("⛔ Bannissement temporaire")
-                .setDescription("Tu as été banni temporairement du serveur **" + guild.getName() + "**.\n\n" +
-                                "⏳ **Durée** : " + dureeLisible + "\n" +
-                                "📝 **Raison** : " + raison)
-                .setThumbnail(targetUser.getEffectiveAvatarUrl())
-                .setColor(Color.RED);
-
-            targetUser.openPrivateChannel().queue(privateChannel -> {
-                privateChannel.sendMessageEmbeds(embedMp.build()).queue(
-                    success -> banAndScheduleUnban(event, guild, targetUser, millis, dureeLisible, raison),
-                    error -> banAndScheduleUnban(event, guild, targetUser, millis, dureeLisible, raison)
-                );
-            });
+            banAndScheduleUnban(event, guild, targetUser, millis, dureeLisible, raison);
         }
 
         if (event.getName().equals("unban")) {
@@ -502,19 +485,82 @@ public class Main extends ListenerAdapter {
         }
     }
 
-    // ==========================================
-    // FILTRE AUTOMATIQUE (MOTS INTERDITS + LIENS)
-    // ==========================================
+    @Override
+    public void onGuildMemberJoin(GuildMemberJoinEvent event) {
+        TextChannel channel = event.getGuild().getTextChannelsByName("🧳-arrivées", true)
+                .stream().findFirst().orElse(null);
+
+        if (channel != null) {
+            int memberCount = event.getGuild().getMemberCount();
+
+            EmbedBuilder embed = new EmbedBuilder()
+                .setTitle("Bienvenue ! 👋")
+                .setDescription("Salut " + event.getMember().getAsMention() + ", ravis de t'avoir parmi nous sur **" + event.getGuild().getName() + "** ! Prends tes aises.\n\n👥 *Nous sommes désormais **" + memberCount + "** membres sur le serveur !*")
+                .setThumbnail(event.getUser().getEffectiveAvatarUrl())
+                .setColor(Color.GREEN);
+
+            channel.sendMessageEmbeds(embed.build()).queue();
+        }
+    }
+
+    @Override
+    public void onGuildMemberRemove(GuildMemberRemoveEvent event) {
+        TextChannel channel = event.getGuild().getTextChannelsByName("🧳-départs", true)
+                .stream().findFirst().orElse(null);
+
+        if (channel != null) {
+            EmbedBuilder embed = new EmbedBuilder()
+                .setTitle("À la prochaine ! 👋")
+                .setDescription("**" + event.getUser().getName() + "** a quitté le serveur.")
+                .setThumbnail(event.getUser().getEffectiveAvatarUrl())
+                .setColor(Color.RED);
+
+            channel.sendMessageEmbeds(embed.build()).queue();
+        }
+    }
+
+    @Override
+    public void onGuildVoiceUpdate(GuildVoiceUpdateEvent event) {
+        long userId = event.getMember().getIdLong();
+
+        if (event.getChannelJoined() != null && event.getChannelLeft() == null) {
+            voiceJoinTimes.put(userId, System.currentTimeMillis());
+        } 
+        else if (event.getChannelLeft() != null) {
+            if (voiceJoinTimes.containsKey(userId)) {
+                long duration = System.currentTimeMillis() - voiceJoinTimes.remove(userId);
+                long channelId = event.getChannelLeft().getIdLong();
+
+                userVoiceTimes
+                    .computeIfAbsent(userId, k -> new HashMap<>())
+                    .merge(channelId, duration, Long::sum);
+            }
+
+            if (event.getChannelJoined() != null) {
+                voiceJoinTimes.put(userId, System.currentTimeMillis());
+            }
+        }
+    }
+
+    // =======================================================
+    // FILTRE AUTOMATIQUE (MOTS INTERDITS AVEC MUTE + LIENS)
+    // =======================================================
     @Override
     public void onMessageReceived(MessageReceivedEvent event) {
-        if (event.getAuthor().isBot() || !event.isFromGuild()) {
-            return;
-        }
+        if (event.getAuthor().isBot() || !event.isFromGuild()) return;
 
         Member member = event.getMember();
         if (member == null) return;
 
-        // Laisser passer les admins et modérateurs
+        long userId = event.getAuthor().getIdLong();
+        long channelId = event.getChannel().getIdLong();
+
+        // Enregistrement des statistiques par salon textuel
+        userChannelMessages
+            .computeIfAbsent(userId, k -> new HashMap<>())
+            .merge(channelId, 1, Integer::sum);
+
+        // Laisser passer les admins et modérateurs pour la modération textuelle
         if (member.hasPermission(Permission.ADMINISTRATOR) || member.hasPermission(Permission.MESSAGE_MANAGE)) {
             return;
         }
@@ -522,24 +568,65 @@ public class Main extends ListenerAdapter {
         String messageContent = event.getMessage().getContentRaw();
         String lowerCaseContent = messageContent.toLowerCase();
 
-        // 1. Vérification des mots interdits (Mute automatique)
-        boolean containsForbiddenWord = forbiddenWords.stream().anyMatch(lowerCaseContent::contains);
-        if (containsForbiddenWord) {
-            event.getMessage().delete().queue(
-                success -> {
-                    // Application du timeout/mute (par exemple 10 minutes)
-                    long durationMillis = TimeUnit.MINUTES.toMillis(10);
-                    member.timeoutFor(durationMillis, TimeUnit.MILLISECONDS).reason("Utilisation de mots interdits").queue(
-                        timeoutSuccess -> {
-                            event.getChannel().sendMessage(member.getAsMention() + " ❌ Tu as été mutes 10 minutes pour utilisation de mots interdits.")
-                                .queue(msg -> scheduler.schedule(() -> msg.delete().queue(s -> {}, e -> {}), 5, TimeUnit.SECONDS));
+        // 1. Système de mots interdits avec doublement de mute et logs-admin
+        List<String> motsInterdits = List.of("negro", "negger", "neger", "niga", "nigga", "nega", "negga", "nigger", "négro", "nig", "niggah", "neggre", "negre");
+
+        for (String mot : motsInterdits) {
+            if (lowerCaseContent.contains(mot)) {
+                int numInfractions = infractionCounts.getOrDefault(userId, 0) + 1;
+                infractionCounts.put(userId, numInfractions);
+
+                long minutesToMute = 5 * (long) Math.pow(2, numInfractions - 1);
+
+                member.timeoutFor(minutesToMute, TimeUnit.MINUTES)
+                    .reason("Utilisation d'un mot interdit (Infraction n°" + numInfractions + ") : " + mot)
+                    .queue(
+                        success -> {
+                            event.getMessage().delete().queue(null, error -> {});
+
+                            String dureeStr = minutesToMute + " minute" + (minutesToMute > 1 ? "s" : "");
+
+                            EmbedBuilder embedMod = new EmbedBuilder()
+                                .setTitle("🚫 Mute Automatique")
+                                .setColor(Color.RED)
+                                .setDescription(event.getAuthor().getAsMention() + " a été rendu muet.")
+                                .addField("Mot détecté", "`" + mot + "`", true)
+                                .addField("Durée du mute", "**" + dureeStr + "**", true)
+                                .addField("Niveau d'infraction", "Récidive n°" + numInfractions, true)
+                                .setTimestamp(LocalDateTime.now());
+
+                            event.getAuthor().openPrivateChannel().queue(privateChannel -> {
+                                privateChannel.sendMessageEmbeds(
+                                    new EmbedBuilder()
+                                        .setTitle("🚫 Tu as été rendu muet")
+                                        .setDescription("Tu as été rendu muet sur **" + event.getGuild().getName() + "** pendant **" + dureeStr + "** pour avoir utilisé un mot interdit.")
+                                        .addField("Récidive", "Infraction n°" + numInfractions + " (la durée est doublée à chaque écart).", false)
+                                        .setColor(Color.RED)
+                                        .build()
+                                ).queue(null, error -> {});
+                            });
+
+                            TextChannel logChannel = event.getGuild().getTextChannelsByName("logs-admin", true)
+                                    .stream().findFirst().orElse(null);
+
+                            if (logChannel != null) {
+                                logChannel.sendMessageEmbeds(embedMod.build()).queue();
+                            }
                         },
-                        timeoutError -> {}
+                        error -> {
+                            TextChannel logChannel = event.getGuild().getTextChannelsByName("logs-admin", true)
+                                    .stream().findFirst().orElse(null);
+
+                            if (logChannel != null) {
+                                logChannel.sendMessage(
+                                    "⚠️ Impossible de mute " + event.getAuthor().getAsMention() 
+                                    + " pour le mot `" + mot + "` (permissions insuffisantes ou rôle supérieur)."
+                                ).queue();
+                            }
+                        }
                     );
-                },
-                error -> {}
-            );
-            return;
+                return;
+            }
         }
 
         // 2. Laisser passer si le texte contient un lien GIF ou l'extension .gif
@@ -757,41 +844,54 @@ public class Main extends ListenerAdapter {
         long val = Long.parseLong(matcher.group(1));
         String unit = matcher.group(2);
 
-        if (unit.equals("h")) {
+        if ("h".equals(unit)) {
             return TimeUnit.HOURS.toMillis(val);
-        } else if (unit.equals("d")) {
+        } else if ("d".equals(unit)) {
             return TimeUnit.DAYS.toMillis(val);
         }
+
         return -1;
     }
 
     private String formatDuration(String input) {
-        return input.replace("h", " heure(s)").replace("d", " jour(s)");
+        Pattern pattern = Pattern.compile("^(\\d+)([hd])$");
+        Matcher matcher = pattern.matcher(input);
+
+        if (!matcher.matches()) return input;
+
+        long val = Long.parseLong(matcher.group(1));
+        String unit = matcher.group(2);
+
+        if ("h".equals(unit)) {
+            return val + " heure(s)";
+        } else {
+            return val + " jour(s)";
+        }
     }
 
     private void banAndScheduleUnban(SlashCommandInteractionEvent event, Guild guild, User targetUser, long millis, String dureeLisible, String raison) {
-        guild.ban(targetUser, 0, java.util.concurrent.TimeUnit.SECONDS).reason(raison).queue(
+        guild.ban(targetUser, 0, TimeUnit.DAYS).reason(raison + " (Tempban)").queue(
             success -> {
-                event.reply("⛔ **" + targetUser.getName() + "** a été banni temporairement pour **" + dureeLisible + "**.").setEphemeral(true).queue();
+                event.reply("🔨 **" + targetUser.getName() + "** a été banni pour **" + dureeLisible + "**. Raison : " + raison).setEphemeral(true).queue();
 
                 TextChannel logChannel = guild.getTextChannelsByName("logs-admin", true)
                         .stream().findFirst().orElse(null);
                 if (logChannel != null) {
-                    logChannel.sendMessage("⛔ **Tempban** : " + targetUser.getAsMention() + " a été banni par " + event.getUser().getAsMention() + ".\n⏳ **Durée** : " + dureeLisible + "\n📝 **Raison** : " + raison).queue();
+                    logChannel.sendMessage("🔨 **Tempban** : " + targetUser.getAsMention() + " banni par " + event.getUser().getAsMention() + " pendant " + dureeLisible + ". Raison : `" + raison + "`").queue();
                 }
 
                 scheduler.schedule(() -> {
                     guild.unban(targetUser).queue(
-                        s -> {
+                        unbanSuccess -> {
                             if (logChannel != null) {
-                                logChannel.sendMessage("🔓 **Fin du Tempban** : " + targetUser.getAsMention() + " a été automatiquement débanni.").queue();
+                                logChannel.sendMessage("🔓 **Déban automatique** : " + targetUser.getAsMention() + " a été débanni après la fin de sa peine.").queue();
                             }
                         },
-                        e -> {}
+                        unbanError -> {}
                     );
                 }, millis, TimeUnit.MILLISECONDS);
             },
-            error -> event.reply("❌ Impossible de bannir ce membre. Vérifie les permissions du bot.").setEphemeral(true).queue()
+            error -> event.reply("❌ Impossible de bannir cet utilisateur (permissions insuffisantes).").setEphemeral(true).queue()
         );
     }
 }
