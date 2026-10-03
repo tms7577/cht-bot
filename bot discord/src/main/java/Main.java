@@ -66,35 +66,35 @@ public class Main extends ListenerAdapter {
     // Stockage du nombre d'infractions (mots interdits) par utilisateur pour doubler la durée
     private final Map<Long, Integer> infractionCounts = new HashMap<>();
 
-public static void main(String[] args) throws Exception {
-    // Mini-serveur web pour garder Render content (Health Check)
-    int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
-    HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
-    server.createContext("/", exchange -> {
-        String response = "Bot is running!";
-        exchange.sendResponseHeaders(200, response.length());
-        OutputStream os = exchange.getResponseBody();
-        os.write(response.getBytes());
-        os.close();
-    });
-    server.start();
+    public static void main(String[] args) throws Exception {
+        // Mini-serveur web pour garder Render content (Health Check)
+        int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
+        HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
+        server.createContext("/", exchange -> {
+            String response = "Bot is running!";
+            exchange.sendResponseHeaders(200, response.length());
+            OutputStream os = exchange.getResponseBody();
+            os.write(response.getBytes());
+            os.close();
+        });
+        server.start();
 
-    // Récupération du token
-    String token = System.getenv("DISCORD_TOKEN");
-    if (token == null) {
-        throw new IllegalArgumentException("La variable d'environnement DISCORD_TOKEN n'est pas définie !");
+        // Récupération du token
+        String token = System.getenv("DISCORD_TOKEN");
+        if (token == null) {
+            throw new IllegalArgumentException("La variable d'environnement DISCORD_TOKEN n'est pas définie !");
+        }
+
+        JDABuilder.createDefault(token)
+                .enableIntents(
+                        GatewayIntent.GUILD_MEMBERS,
+                        GatewayIntent.GUILD_MESSAGES,
+                        GatewayIntent.MESSAGE_CONTENT,
+                        GatewayIntent.GUILD_VOICE_STATES
+                )
+                .addEventListeners(new Main())
+                .build();
     }
-
-    JDABuilder.createDefault(token)
-            .enableIntents(
-                    GatewayIntent.GUILD_MEMBERS,
-                    GatewayIntent.GUILD_MESSAGES,
-                    GatewayIntent.MESSAGE_CONTENT,
-                    GatewayIntent.GUILD_VOICE_STATES
-            )
-            .addEventListeners(new Main())
-            .build();
-}
 
     @Override
     public void onReady(ReadyEvent event) {
@@ -129,6 +129,10 @@ public static void main(String[] args) throws Exception {
                 Commands.slash("setup-ticket", "Affiche le panneau avec catégories de tickets")
                     .addOption(OptionType.CHANNEL, "salon", "Salon où afficher le panneau", true)
                     .addOption(OptionType.ROLE, "role-staff", "Rôle du staff ayant accès aux tickets", true)
+                    .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.ADMINISTRATOR)),
+                Commands.slash("setup-tiktok", "Configure les notifications TikTok pour un créateur")
+                    .addOption(OptionType.CHANNEL, "salon", "Salon où envoyer les alertes TikTok", true)
+                    .addOption(OptionType.STRING, "username", "Nom d'utilisateur TikTok (ex: @moncompte)", true)
                     .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.ADMINISTRATOR))
             ).queue();
         }
@@ -281,7 +285,6 @@ public static void main(String[] args) throws Exception {
 
             long userId = targetMember.getIdLong();
 
-            // Total messages et salon le plus actif
             Map<Long, Integer> userMsgs = userChannelMessages.getOrDefault(userId, new HashMap<>());
             int totalMsgs = userMsgs.values().stream().mapToInt(Integer::intValue).sum();
 
@@ -298,7 +301,6 @@ public static void main(String[] args) throws Exception {
                 topTextCount = userMsgs.get(topTextChannelId);
             }
 
-            // Total vocal et salon le plus actif
             Map<Long, Long> userVoices = userVoiceTimes.getOrDefault(userId, new HashMap<>());
             long totalVoiceMillis = userVoices.values().stream().mapToLong(Long::longValue).sum();
 
@@ -319,7 +321,6 @@ public static void main(String[] args) throws Exception {
                 topVoiceMillis = userVoices.get(topVoiceChannelId);
             }
 
-            // Formats lisibles
             long minutesTotal = TimeUnit.MILLISECONDS.toMinutes(totalVoiceMillis) % 60;
             long heuresTotal = TimeUnit.MILLISECONDS.toHours(totalVoiceMillis);
             String tempsVocalTotal = heuresTotal + "h " + minutesTotal + "m";
@@ -369,6 +370,23 @@ public static void main(String[] args) throws Exception {
             targetChannel.sendMessageEmbeds(embed.build()).setActionRow(selectMenu).queue(
                 success -> event.reply("✅ Panneau de tickets configuré avec succès dans " + targetChannel.getAsMention()).setEphemeral(true).queue(),
                 error -> event.reply("❌ Erreur lors de la configuration.").setEphemeral(true).queue()
+            );
+        }
+
+        if (event.getName().equals("setup-tiktok")) {
+            TextChannel targetChannel = event.getOption("salon").getAsChannel().asTextChannel();
+            String username = event.getOption("username").getAsString();
+
+            EmbedBuilder embed = new EmbedBuilder()
+                .setTitle("🎵 Notifications TikTok configurées")
+                .setDescription("Les alertes pour le compte **" + username + "** ont été activées dans ce salon !\n\n" +
+                                "⚠️ *Note : Les notifications automatiques s'afficheront ici dès qu'une nouvelle vidéo sera publiée.*")
+                .setColor(new Color(254, 44, 85)) // Couleur TikTok
+                .setFooter("TikTok Tracker • " + event.getGuild().getName());
+
+            targetChannel.sendMessageEmbeds(embed.build()).queue(
+                success -> event.reply("✅ Système TikTok configuré avec succès dans " + targetChannel.getAsMention() + " pour **" + username + "** !").setEphemeral(true).queue(),
+                error -> event.reply("❌ Erreur lors de la configuration TikTok.").setEphemeral(true).queue()
             );
         }
     }
@@ -504,11 +522,9 @@ public static void main(String[] args) throws Exception {
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
 
-        // Fond principal
         g.setColor(new Color(28, 29, 34));
         g.fill(new RoundRectangle2D.Float(0, 0, width, height, 24, 24));
 
-        // Avatar
         BufferedImage avatar;
         try {
             URL url = new URL(member.getUser().getEffectiveAvatarUrl() + "?size=128");
@@ -526,18 +542,15 @@ public static void main(String[] args) throws Exception {
 
         g.drawImage(circularAvatar, 20, 20, null);
 
-        // Informations utilisateur
         g.setColor(Color.WHITE);
         g.setFont(new Font("SansSerif", Font.BOLD, 20));
         g.drawString(member.getEffectiveName(), 86, 42);
 
-        // Nom du serveur
         String serverName = member.getGuild().getName();
         g.setFont(new Font("SansSerif", Font.PLAIN, 12));
         g.setColor(new Color(235, 180, 50));
         g.drawString(serverName, 86, 62);
 
-        // Badges supérieurs
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.FRENCH);
         String createdDate = member.getUser().getTimeCreated().format(formatter);
         String joinedDate = member.getTimeJoined().format(formatter);
@@ -545,7 +558,6 @@ public static void main(String[] args) throws Exception {
         drawHeaderBadge(g, 460, 20, "Créé le", createdDate);
         drawHeaderBadge(g, 585, 20, "Rejoint le", joinedDate);
 
-        // Bloc 1: Classements
         drawContainer(g, 20, 90, 215, 120);
         g.setColor(new Color(170, 175, 185));
         g.setFont(new Font("SansSerif", Font.BOLD, 13));
@@ -556,7 +568,6 @@ public static void main(String[] args) throws Exception {
         drawRowItem(g, 32, 125, 191, 32, "Messages", "#3");
         drawRowItem(g, 32, 165, 191, 32, "Vocal", "#4");
 
-        // Bloc 2: Messages
         drawContainer(g, 252, 90, 215, 120);
         g.setColor(new Color(170, 175, 185));
         g.setFont(new Font("SansSerif", Font.BOLD, 13));
@@ -568,7 +579,6 @@ public static void main(String[] args) throws Exception {
         drawStatBreakdownRow(g, 264, 153, 191, 24, "7j", messages + " msgs");
         drawStatBreakdownRow(g, 264, 181, 191, 24, "30j", messages + " msgs");
 
-        // Bloc 3: Activité Vocale
         drawContainer(g, 484, 90, 216, 120);
         g.setColor(new Color(170, 175, 185));
         g.setFont(new Font("SansSerif", Font.BOLD, 13));
@@ -580,7 +590,6 @@ public static void main(String[] args) throws Exception {
         drawStatBreakdownRow(g, 496, 153, 192, 24, "7j", voiceTime);
         drawStatBreakdownRow(g, 496, 181, 192, 24, "30j", voiceTime);
 
-        // Bloc 4: Salons Principaux & Activité (dynamique)
         drawContainer(g, 20, 220, 680, 105);
         g.setColor(new Color(170, 175, 185));
         g.setFont(new Font("SansSerif", Font.BOLD, 13));
@@ -589,7 +598,6 @@ public static void main(String[] args) throws Exception {
         drawChannelRow(g, 32, 255, 320, 28, "💬 " + topTextName, topTextDetail, new Color(87, 242, 135));
         drawChannelRow(g, 32, 288, 320, 28, "🔊 " + topVoiceName, topVoiceDetail, new Color(235, 69, 158));
 
-        // Pied de page
         g.setColor(new Color(120, 125, 135));
         g.setFont(new Font("SansSerif", Font.PLAIN, 11));
         g.drawString("Serveur : " + serverName + " — Fuseau : UTC", 20, 345);
@@ -715,154 +723,21 @@ public static void main(String[] args) throws Exception {
                 TextChannel logChannel = guild.getTextChannelsByName("logs-admin", true)
                         .stream().findFirst().orElse(null);
                 if (logChannel != null) {
-                    logChannel.sendMessage("🔨 **Tempban** : " + targetUser.getAsMention() + " banni par " + event.getUser().getAsMention() + " pendant " + dureeLisible + ". Raison : `" + raison + "`").queue();
+                    logChannel.sendMessage("🔨 **Tempban** : " + targetUser.getAsMention() + " a été banni pour " + dureeLisible + ". Raison : " + raison).queue();
                 }
 
                 scheduler.schedule(() -> {
                     guild.unban(targetUser).queue(
                         unbanSuccess -> {
                             if (logChannel != null) {
-                                logChannel.sendMessage("🔓 **Déban automatique** : " + targetUser.getAsMention() + " a été débanni après la fin de sa peine.").queue();
+                                logChannel.sendMessage("🔓 **Fin du Tempban** : " + targetUser.getAsMention() + " a été automatiquement débanni.").queue();
                             }
                         },
                         unbanError -> {}
                     );
                 }, millis, TimeUnit.MILLISECONDS);
             },
-            error -> event.reply("❌ Impossible de bannir cet utilisateur (permissions insuffisantes).").setEphemeral(true).queue()
+            error -> event.reply("❌ Impossible de bannir ce membre. Vérifie les permissions du bot.").setEphemeral(true).queue()
         );
-    }
-
-    @Override
-    public void onGuildMemberJoin(GuildMemberJoinEvent event) {
-        TextChannel channel = event.getGuild().getTextChannelsByName("🧳-arrivées", true)
-                .stream().findFirst().orElse(null);
-
-        if (channel != null) {
-            int memberCount = event.getGuild().getMemberCount();
-
-            EmbedBuilder embed = new EmbedBuilder()
-                .setTitle("Bienvenue ! 👋")
-                .setDescription("Salut " + event.getMember().getAsMention() + ", ravis de t'avoir parmi nous sur **" + event.getGuild().getName() + "** ! Prends tes aises.\n\n👥 *Nous sommes désormais **" + memberCount + "** membres sur le serveur !*")
-                .setThumbnail(event.getUser().getEffectiveAvatarUrl())
-                .setColor(Color.GREEN);
-
-            channel.sendMessageEmbeds(embed.build()).queue();
-        }
-    }
-
-    @Override
-    public void onGuildMemberRemove(GuildMemberRemoveEvent event) {
-        TextChannel channel = event.getGuild().getTextChannelsByName("🧳-départs", true)
-                .stream().findFirst().orElse(null);
-
-        if (channel != null) {
-            EmbedBuilder embed = new EmbedBuilder()
-                .setTitle("À la prochaine ! 👋")
-                .setDescription("**" + event.getUser().getName() + "** a quitté le serveur.")
-                .setThumbnail(event.getUser().getEffectiveAvatarUrl())
-                .setColor(Color.RED);
-
-            channel.sendMessageEmbeds(embed.build()).queue();
-        }
-    }
-
-    @Override
-    public void onGuildVoiceUpdate(GuildVoiceUpdateEvent event) {
-        long userId = event.getMember().getIdLong();
-
-        if (event.getChannelJoined() != null && event.getChannelLeft() == null) {
-            voiceJoinTimes.put(userId, System.currentTimeMillis());
-        } 
-        else if (event.getChannelLeft() != null) {
-            if (voiceJoinTimes.containsKey(userId)) {
-                long duration = System.currentTimeMillis() - voiceJoinTimes.remove(userId);
-                long channelId = event.getChannelLeft().getIdLong();
-
-                userVoiceTimes
-                    .computeIfAbsent(userId, k -> new HashMap<>())
-                    .merge(channelId, duration, Long::sum);
-            }
-
-            if (event.getChannelJoined() != null) {
-                voiceJoinTimes.put(userId, System.currentTimeMillis());
-            }
-        }
-    }
-
-    @Override
-    public void onMessageReceived(MessageReceivedEvent event) {
-        if (event.getAuthor().isBot() || !event.isFromGuild()) return;
-
-        long userId = event.getAuthor().getIdLong();
-        long channelId = event.getChannel().getIdLong();
-
-        // Enregistrement des statistiques par salon textuel
-        userChannelMessages
-            .computeIfAbsent(userId, k -> new HashMap<>())
-            .merge(channelId, 1, Integer::sum);
-
-        // --- SYSTÈME DE MODÉRATION ET DOUBLEMENT DE MUTE ---
-        List<String> motsInterdits = List.of("negro", "negger", "neger", "niga", "nigga", "nega", "negga", "nigger", "négro", "nig", "niggah", "neggre", "negre");
-        String message = event.getMessage().getContentRaw().toLowerCase();
-
-        for (String mot : motsInterdits) {
-            if (message.contains(mot)) {
-
-                int numInfractions = infractionCounts.getOrDefault(userId, 0) + 1;
-                infractionCounts.put(userId, numInfractions);
-
-                long minutesToMute = 5 * (long) Math.pow(2, numInfractions - 1);
-
-                event.getMember().timeoutFor(minutesToMute, TimeUnit.MINUTES)
-                    .reason("Utilisation d'un mot interdit (Infraction n°" + numInfractions + ") : " + mot)
-                    .queue(
-                        success -> {
-                            event.getMessage().delete().queue(null, error -> {});
-
-                            String dureeStr = minutesToMute + " minute" + (minutesToMute > 1 ? "s" : "");
-
-                            EmbedBuilder embedMod = new EmbedBuilder()
-                                .setTitle("🚫 Mute Automatique")
-                                .setColor(Color.RED)
-                                .setDescription(event.getAuthor().getAsMention() + " a été rendu muet.")
-                                .addField("Mot détecté", "`" + mot + "`", true)
-                                .addField("Durée du mute", "**" + dureeStr + "**", true)
-                                .addField("Niveau d'infraction", "Récidive n°" + numInfractions, true)
-                                .setTimestamp(LocalDateTime.now());
-
-                            event.getAuthor().openPrivateChannel().queue(privateChannel -> {
-                                privateChannel.sendMessageEmbeds(
-                                    new EmbedBuilder()
-                                        .setTitle("🚫 Tu as été rendu muet")
-                                        .setDescription("Tu as été rendu muet sur **" + event.getGuild().getName() + "** pendant **" + dureeStr + "** pour avoir utilisé un mot interdit.")
-                                        .addField("Récidive", "Infraction n°" + numInfractions + " (la durée est doublée à chaque écart).", false)
-                                        .setColor(Color.RED)
-                                        .build()
-                                ).queue(null, error -> {});
-                            });
-
-                            TextChannel logChannel = event.getGuild().getTextChannelsByName("logs-admin", true)
-                                    .stream().findFirst().orElse(null);
-
-                            if (logChannel != null) {
-                                logChannel.sendMessageEmbeds(embedMod.build()).queue();
-                            }
-                        },
-                        error -> {
-                            TextChannel logChannel = event.getGuild().getTextChannelsByName("logs-admin", true)
-                                    .stream().findFirst().orElse(null);
-
-                            if (logChannel != null) {
-                                logChannel.sendMessage(
-                                    "⚠️ Impossible de mute " + event.getAuthor().getAsMention() 
-                                    + " pour le mot `" + mot + "` (permissions insuffisantes ou rôle supérieur)."
-                                ).queue();
-                            }
-                        }
-                    );
-                break;
-            }
-        }
     }
 }
