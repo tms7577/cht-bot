@@ -543,7 +543,7 @@ public class Main extends ListenerAdapter {
     }
 
     // =======================================================
-    // FILTRE AUTOMATIQUE (MOTS INTERDITS + BLOCAGE DE TOUS LES LIENS SAUF GIFS)
+    // FILTRE AUTOMATIQUE (MOTS INTERDITS + BLOCAGE DE LIENS SANS GIFs/EMBEDS)
     // =======================================================
     @Override
     public void onMessageReceived(MessageReceivedEvent event) {
@@ -625,16 +625,23 @@ public class Main extends ListenerAdapter {
 
         boolean hasLink = matcher.find();
 
-        // 3. Exception pour les GIFs autorisés
+        // 3. Vérification des éléments visuels autorisés (Pièces jointes, Embeds natifs et Stickers)
+        boolean hasAttachments = !event.getMessage().getAttachments().isEmpty();
+        boolean hasEmbeds = !event.getMessage().getEmbeds().isEmpty();
+        boolean hasStickers = !event.getMessage().getStickers().isEmpty();
+
         boolean isAllowedGifLink = 
                 lowerCaseContent.contains("tenor.com") ||
                 lowerCaseContent.contains("giphy.com") ||
                 lowerCaseContent.contains("gph.is") ||
                 lowerCaseContent.contains("imgur.com") ||
                 lowerCaseContent.contains(".gif") ||
-                lowerCaseContent.contains(".webp");
+                lowerCaseContent.contains(".webp") ||
+                hasAttachments || 
+                hasEmbeds || 
+                hasStickers;
 
-        // 4. Suppression si c'est un lien externe de site web et que ce n'est PAS un GIF autorisé
+        // 4. Suppression si c'est un lien externe de site web et que ce n'est PAS un média/GIF autorisé
         if (hasLink && !isAllowedGifLink) {
             event.getMessage().delete().queue(
                 success -> {
