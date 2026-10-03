@@ -58,16 +58,12 @@ public class Main extends ListenerAdapter {
 
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
 
-    // Stockage par salon : Map<UserId, Map<ChannelId, Valeur>>
     private final Map<Long, Map<Long, Integer>> userChannelMessages = new HashMap<>();
     private final Map<Long, Map<Long, Long>> userVoiceTimes = new HashMap<>();
     private final Map<Long, Long> voiceJoinTimes = new HashMap<>();
-
-    // Stockage du nombre d'infractions (mots interdits) par utilisateur pour doubler la durée
     private final Map<Long, Integer> infractionCounts = new HashMap<>();
 
     public static void main(String[] args) throws Exception {
-        // Mini-serveur web pour garder Render content (Health Check)
         int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
         HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
         server.createContext("/", exchange -> {
@@ -79,7 +75,6 @@ public class Main extends ListenerAdapter {
         });
         server.start();
 
-        // Récupération du token
         String token = System.getenv("DISCORD_TOKEN");
         if (token == null) {
             throw new IllegalArgumentException("La variable d'environnement DISCORD_TOKEN n'est pas définie !");
@@ -528,9 +523,9 @@ public class Main extends ListenerAdapter {
                          || messageContent.contains("giphy.com") 
                          || messageContent.contains(".gif");
 
-        // Laisser passer si le message génère un embed avec une image/vidéo (ex: aperçu Tenor natif)
+        // Laisser passer si le message génère un embed avec une image (ex: aperçu Tenor natif)
         boolean hasGifEmbed = !event.getMessage().getEmbeds().isEmpty() && 
-                              event.getMessage().getEmbeds().stream().anyMatch(e -> e.getImage() != null || e.getVideo() != null);
+                              event.getMessage().getEmbeds().stream().anyMatch(e -> e.getImage() != null);
 
         if (isGifLink || hasGifEmbed) {
             return; 
