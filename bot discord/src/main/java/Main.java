@@ -64,7 +64,7 @@ public class Main extends ListenerAdapter {
     private final Map<Long, Integer> infractionCounts = new HashMap<>();
 
     // Liste des mots interdits pour le mute automatique
-    private final List<String> forbiddenWords = List.of("motinterdit1", "motinterdit2"); // Remplace par tes mots
+    private final List<String> forbiddenWords = List.of("negro", "negger", "neger", "niga", "nigga", "nega", "negga", "nigger", "négro", "nig", "niggah", "neggre", "negre"); // Remplace par tes mots
 
     public static void main(String[] args) throws Exception {
         int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
