@@ -641,8 +641,8 @@ public class Main extends ListenerAdapter {
         boolean hasRichEmbed = !event.getMessage().getEmbeds().isEmpty() && 
                                event.getMessage().getEmbeds().stream().anyMatch(e -> 
                                    (e.getImage() != null) || 
-                                   (e.getVideo() != null) || 
                                    (e.getThumbnail() != null) ||
+                                   (e.getVideoInfo() != null) ||
                                    (e.getUrl() != null && (e.getUrl().contains("tenor.com") || e.getUrl().contains("giphy.com")))
                                );
 
