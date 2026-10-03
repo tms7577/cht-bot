@@ -63,6 +63,9 @@ public class Main extends ListenerAdapter {
     private final Map<Long, Long> voiceJoinTimes = new HashMap<>();
     private final Map<Long, Integer> infractionCounts = new HashMap<>();
 
+    // Liste des mots interdits pour le mute automatique
+    private final List<String> forbiddenWords = List.of("motinterdit1", "motinterdit2"); // Remplace par tes mots
+
     public static void main(String[] args) throws Exception {
         int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
         HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
@@ -500,7 +503,7 @@ public class Main extends ListenerAdapter {
     }
 
     // ==========================================
-    // FILTRE ANTI-LIENS (AVEC EXCEPTION GIFs & EMBEDS)
+    // FILTRE AUTOMATIQUE (MOTS INTERDITS + LIENS)
     // ==========================================
     @Override
     public void onMessageReceived(MessageReceivedEvent event) {
@@ -517,13 +520,33 @@ public class Main extends ListenerAdapter {
         }
 
         String messageContent = event.getMessage().getContentRaw();
+        String lowerCaseContent = messageContent.toLowerCase();
 
-        // 1. Laisser passer si le texte contient un lien GIF ou l'extension .gif
+        // 1. Vérification des mots interdits (Mute automatique)
+        boolean containsForbiddenWord = forbiddenWords.stream().anyMatch(lowerCaseContent::contains);
+        if (containsForbiddenWord) {
+            event.getMessage().delete().queue(
+                success -> {
+                    // Application du timeout/mute (par exemple 10 minutes)
+                    long durationMillis = TimeUnit.MINUTES.toMillis(10);
+                    member.timeoutFor(durationMillis, TimeUnit.MILLISECONDS).reason("Utilisation de mots interdits").queue(
+                        timeoutSuccess -> {
+                            event.getChannel().sendMessage(member.getAsMention() + " ❌ Tu as été mutes 10 minutes pour utilisation de mots interdits.")
+                                .queue(msg -> scheduler.schedule(() -> msg.delete().queue(s -> {}, e -> {}), 5, TimeUnit.SECONDS));
+                        },
+                        timeoutError -> {}
+                    );
+                },
+                error -> {}
+            );
+            return;
+        }
+
+        // 2. Laisser passer si le texte contient un lien GIF ou l'extension .gif
         boolean isGifLink = messageContent.contains("tenor.com") 
                          || messageContent.contains("giphy.com") 
                          || messageContent.contains(".gif");
 
-        // Laisser passer si le message génère un embed avec une image (ex: aperçu Tenor natif)
         boolean hasGifEmbed = !event.getMessage().getEmbeds().isEmpty() && 
                               event.getMessage().getEmbeds().stream().anyMatch(e -> e.getImage() != null);
 
@@ -531,7 +554,7 @@ public class Main extends ListenerAdapter {
             return; 
         }
 
-        // 2. Bloquer les autres liens et invitations Discord
+        // 3. Bloquer les autres liens et invitations Discord
         Pattern linkPattern = Pattern.compile("(?i)\\b((https?|ftp|file)://[-a-zA-Z0-9+&@#/%?=~_|!:,.;]*[-a-zA-Z0-9+&@#/%=~_|]|www\\.[-a-zA-Z0-9+&@#/%?=~_|!:,.;]*[-a-zA-Z0-9+&@#/%=~_|]|discord\\.gg/[a-zA-Z0-9]+|discord(app)?\\.com/invite/[a-zA-Z0-9]+)\\b");
         Matcher matcher = linkPattern.matcher(messageContent);
 
