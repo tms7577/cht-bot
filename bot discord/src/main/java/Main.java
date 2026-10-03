@@ -543,7 +543,7 @@ public class Main extends ListenerAdapter {
     }
 
     // =======================================================
-    // FILTRE AUTOMATIQUE (MOTS INTERDITS AVEC MUTE + LIENS)
+    // FILTRE AUTOMATIQUE (MOTS INTERDITS AVEC MUTE + LIENS / GIFS)
     // =======================================================
     @Override
     public void onMessageReceived(MessageReceivedEvent event) {
@@ -629,15 +629,24 @@ public class Main extends ListenerAdapter {
             }
         }
 
-        // 2. Laisser passer si le texte contient un lien GIF ou l'extension .gif
-        boolean isGifLink = messageContent.contains("tenor.com") 
-                         || messageContent.contains("giphy.com") 
-                         || messageContent.contains(".gif");
+        // 2. Vérification élargie et robuste pour les GIFs, pièces jointes et embeds
+        boolean hasAttachments = !event.getMessage().getAttachments().isEmpty();
+        
+        boolean isGifLink = lowerCaseContent.contains("tenor.com") 
+                         || lowerCaseContent.contains("giphy.com") 
+                         || lowerCaseContent.contains("imgur.com")
+                         || lowerCaseContent.contains(".gif")
+                         || lowerCaseContent.contains(".webp");
 
-        boolean hasGifEmbed = !event.getMessage().getEmbeds().isEmpty() && 
-                              event.getMessage().getEmbeds().stream().anyMatch(e -> e.getImage() != null);
+        boolean hasRichEmbed = !event.getMessage().getEmbeds().isEmpty() && 
+                               event.getMessage().getEmbeds().stream().anyMatch(e -> 
+                                   (e.getImage() != null) || 
+                                   (e.getVideo() != null) || 
+                                   (e.getThumbnail() != null) ||
+                                   (e.getUrl() != null && (e.getUrl().contains("tenor.com") || e.getUrl().contains("giphy.com")))
+                               );
 
-        if (isGifLink || hasGifEmbed) {
+        if (hasAttachments || isGifLink || hasRichEmbed) {
             return; 
         }
 
