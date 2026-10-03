@@ -543,7 +543,7 @@ public class Main extends ListenerAdapter {
     }
 
     // =======================================================
-    // FILTRE AUTOMATIQUE (MOTS INTERDITS AVEC MUTE + LIENS / GIFS)
+    // FILTRE AUTOMATIQUE (MOTS INTERDITS AVEC MUTE + GESTION DES LIENS/GIFS/STICKERS)
     // =======================================================
     @Override
     public void onMessageReceived(MessageReceivedEvent event) {
@@ -619,7 +619,7 @@ public class Main extends ListenerAdapter {
 
                             if (logChannel != null) {
                                 logChannel.sendMessage(
-                                    "⚠️️ Impossible de mute " + event.getAuthor().getAsMention() 
+                                    "⚠️ Impossible de mute " + event.getAuthor().getAsMention() 
                                     + " pour le mot `" + mot + "` (permissions insuffisantes ou rôle supérieur)."
                                 ).queue();
                             }
@@ -629,30 +629,31 @@ public class Main extends ListenerAdapter {
             }
         }
 
-        // 2. Autoriser uniquement les pièces jointes (images/fichiers) et les liens de GIFs (Tenor/Giphy/Imgur)
+        // 2. Vérification des exceptions autorisées (Stickers, Pièces jointes, Embeds et GIFs de plateformes)
+        boolean hasStickers = !event.getMessage().getStickers().isEmpty();
         boolean hasAttachments = !event.getMessage().getAttachments().isEmpty();
-        
-        boolean isGifLink = lowerCaseContent.contains("tenor.com/view/") 
-                         || lowerCaseContent.contains("giphy.com/gifs/") 
-                         || lowerCaseContent.contains("imgur.com/")
-                         || lowerCaseContent.endsWith(".gif")
-                         || lowerCaseContent.endsWith(".webp")
-                         || lowerCaseContent.endsWith(".png")
-                         || lowerCaseContent.endsWith(".jpg")
-                         || lowerCaseContent.endsWith(".jpeg");
+        boolean hasEmbeds = !event.getMessage().getEmbeds().isEmpty();
 
-        if (hasAttachments || isGifLink) {
-            return; 
-        }
+        boolean isGifOrAllowedMedia = 
+                lowerCaseContent.contains("tenor.com") ||
+                lowerCaseContent.contains("giphy.com") ||
+                lowerCaseContent.contains("gph.is") ||
+                lowerCaseContent.contains("imgur.com") ||
+                lowerCaseContent.contains(".gif") ||
+                lowerCaseContent.contains(".webp") ||
+                hasAttachments || 
+                hasEmbeds ||
+                hasStickers;
 
-        // 3. Bloquer tous les autres liens, sites web et invitations Discord
+        // 3. Détection des liens web textuels
         Pattern linkPattern = Pattern.compile("(?i)\\b((https?|ftp|file)://[-a-zA-Z0-9+&@#/%?=~_|!:,.;]*[-a-zA-Z0-9+&@#/%=~_|]|www\\.[-a-zA-Z0-9+&@#/%?=~_|!:,.;]*[-a-zA-Z0-9+&@#/%=~_|]|discord\\.gg/[a-zA-Z0-9]+|discord(app)?\\.com/invite/[a-zA-Z0-9]+)\\b");
         Matcher matcher = linkPattern.matcher(messageContent);
 
-        if (matcher.find()) {
+        // Si un lien web externe est trouvé et qu'il ne s'agit PAS d'un GIF/média autorisé ni d'un sticker, on supprime.
+        if (matcher.find() && !isGifOrAllowedMedia) {
             event.getMessage().delete().queue(
                 success -> {
-                    event.getChannel().sendMessage(member.getAsMention() + " ❌ Les liens ne sont pas autorisés sur ce serveur !")
+                    event.getChannel().sendMessage(member.getAsMention() + " ❌ Les liens externes ne sont pas autorisés sur ce serveur !")
                         .queue(msg -> {
                             scheduler.schedule(() -> msg.delete().queue(s -> {}, e -> {}), 5, TimeUnit.SECONDS);
                         });
