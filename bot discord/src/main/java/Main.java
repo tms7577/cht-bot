@@ -380,8 +380,8 @@ public class Main extends ListenerAdapter {
             EmbedBuilder embed = new EmbedBuilder()
                 .setTitle("🎵 Notifications TikTok configurées")
                 .setDescription("Les alertes pour le compte **" + username + "** ont été activées dans ce salon !\n\n" +
-                                "⚠️️ *Note : Les notifications automatiques s'afficheront ici dès qu'une nouvelle vidéo sera publiée.*")
-                .setColor(new Color(254, 44, 85)) // Couleur TikTok
+                                "⚠ *Note : Les notifications automatiques s'afficheront ici dès qu'une nouvelle vidéo sera publiée.*")
+                .setColor(new Color(254, 44, 85))
                 .setFooter("TikTok Tracker • " + event.getGuild().getName());
 
             targetChannel.sendMessageEmbeds(embed.build()).queue(
@@ -505,7 +505,7 @@ public class Main extends ListenerAdapter {
     }
 
     // ==========================================
-    // FILTRE ANTI-LIENS (AVEC EXCEPTION GIFS)
+    // FILTRE ANTI-LIENS (AVEC EXCEPTION GIFs & EMBEDS)
     // ==========================================
     @Override
     public void onMessageReceived(MessageReceivedEvent event) {
@@ -523,9 +523,16 @@ public class Main extends ListenerAdapter {
 
         String messageContent = event.getMessage().getContentRaw();
 
-        // 1. Autoriser les liens Tenor et Giphy (GIFs)
-        boolean isGifLink = messageContent.contains("tenor.com") || messageContent.contains("giphy.com");
-        if (isGifLink) {
+        // 1. Laisser passer si le texte contient un lien GIF ou l'extension .gif
+        boolean isGifLink = messageContent.contains("tenor.com") 
+                         || messageContent.contains("giphy.com") 
+                         || messageContent.contains(".gif");
+
+        // Laisser passer si le message génère un embed avec une image/vidéo (ex: aperçu Tenor natif)
+        boolean hasGifEmbed = !event.getMessage().getEmbeds().isEmpty() && 
+                              event.getMessage().getEmbeds().stream().anyMatch(e -> e.getImage() != null || e.getVideo() != null);
+
+        if (isGifLink || hasGifEmbed) {
             return; 
         }
 
